@@ -13,7 +13,7 @@
 | Key alias | `ANDROID_KEY_ALIAS` | `KEY_ALIAS` |
 | Key 密碼 | `ANDROID_KEY_PASSWORD` | `KEY_PASSWORD` |
 
-產生 Base64 可使用 `base64 -w 0 release.keystore`（Linux），或 `base64 < release.keystore | tr -d '\\n'`（macOS）。使用整份檔案原始二進位內容的 Base64，不是 alias 或密碼的 Base64。
+產生 Base64 可使用 `base64 -w 0 release.keystore`（Linux），或 `base64 < release.keystore | tr -d '\n'`（macOS）。使用整份檔案原始二進位內容的 Base64，不是 alias 或密碼的 Base64。
 
 缺任何項目、無法解碼、alias 不存在、密碼不正確、APK 未使用 Actions 金鑰，均讓 CI **直接失敗**；不會偷偷回退到倉庫中的公開 `signing/local-testing.p12`。本地 Debug 仍使用既有測試簽章。本地沒有提供簽章環境變數時，`assembleRelease` 可能只會產出未簽章 APK。
 
