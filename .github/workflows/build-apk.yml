@@ -5,7 +5,12 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
+
+# Prevent older builds from publishing after newer master commits.
+concurrency:
+  group: media-organizer-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -40,18 +45,56 @@ jobs:
           mkdir -p dist
           set -o pipefail && bash tests/run-tests.sh | tee dist/test-results.txt
 
-      - name: Build signed Release APK
+      - name: Load Android signing key from Actions Secrets
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 || secrets.KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD || secrets.KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS || secrets.KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD || secrets.KEY_PASSWORD }}
         run: |
-          gradle --no-daemon --max-workers=2 -Dorg.gradle.jvmargs=-Xmx2g :app:assembleRelease
+          set -euo pipefail
+          for name in KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
+            if [[ -z "${!name}" ]]; then
+              echo "::error::Missing required Actions signing secret: $name"
+              exit 1
+            fi
+          done
+          umask 077
+          signing_file="$RUNNER_TEMP/media-organizer-release.keystore"
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$signing_file"
+          test -s "$signing_file"
+          keytool -list -keystore "$signing_file" \
+            -storepass "$ANDROID_KEYSTORE_PASSWORD" -alias "$ANDROID_KEY_ALIAS" > /dev/null
+          echo "ANDROID_KEYSTORE_FILE=$signing_file" >> "$GITHUB_ENV"
+
+      - name: Build signed Release APK
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD || secrets.KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS || secrets.KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD || secrets.KEY_PASSWORD }}
+        run: |
+          gradle --no-daemon --max-workers=2 -Dorg.gradle.jvmargs=-Xmx2g -PrequireReleaseSigning :app:assembleRelease
 
       - name: Copy Release APK
         run: |
           cp app/build/outputs/apk/release/app-release.apk dist/Media-Organizer.apk
 
       - name: Verify signature, metadata, model, and native libraries
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD || secrets.KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS || secrets.KEY_ALIAS }}
         run: |
+          set -euo pipefail
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs \
             dist/Media-Organizer.apk > dist/apk-signature.txt
+          # Check that the installed APK really uses the Actions certificate.
+          expected_sha="$(keytool -exportcert -keystore "$ANDROID_KEYSTORE_FILE" \
+            -storepass "$ANDROID_KEYSTORE_PASSWORD" -alias "$ANDROID_KEY_ALIAS" | sha256sum | awk '{print $1}')"
+          actual_sha="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' dist/apk-signature.txt | head -n 1)"
+          if [[ -z "$actual_sha" || "$expected_sha" != "$actual_sha" ]]; then
+            echo "::error::APK signer does not match Actions keystore"
+            exit 1
+          fi
           "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging \
             dist/Media-Organizer.apk > dist/apk-metadata.txt
           (cd dist && sha256sum Media-Organizer.apk > Media-Organizer.apk.sha256)
@@ -142,46 +185,60 @@ jobs:
 
   publish:
     needs: [build, smoke_test]
-    if: success()
+    if: ${{ success() && github.ref == 'refs/heads/master' }}
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write
     steps:
-      - name: Check out source
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
-
-      - name: Download APK Artifact
+      - name: Download verified APK
         uses: actions/download-artifact@v4
         with:
           name: Media-Organizer-APK
           path: dist/
 
-      - name: Commit verified APK to packaging branch
-        if: startsWith(github.ref, 'refs/heads/codex/package-apk-') && github.event_name == 'push'
+      - name: Publish latest signed APK and remove older Releases
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add dist/
-          if git diff --cached --quiet; then
+          set -euo pipefail
+          # Avoid publishing obsolete commits after master has moved forward.
+          master_sha="$(gh api "repos/$GITHUB_REPOSITORY/commits/master" --jq '.sha')"
+          if [[ "$master_sha" != "$GITHUB_SHA" ]]; then
+            echo "Master advanced to $master_sha; skipping this outdated release."
             exit 0
           fi
-          git commit -m "Package signed APK and verification results"
-          git push origin "HEAD:$GITHUB_REF_NAME"
 
-      - name: Upload APK to Release
-        if: startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main'
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release create latest-build --title "Latest APK Build" --notes "Latest build" || true
-          max_retries=3
-          success=false
-          for i in 1 2 3; do
-            echo "Attempt $i"
-            if gh release upload latest-build dist/Media-Organizer.apk --clobber; then
-              success=true
-              break
-            fi
-            sleep 10
-          done
-          if [ "$success" = false ]; then
-            /bin/false
-          fi
+          version="$(sed -nE "s/.*versionName='([^']+)'.*/\1/p" dist/apk-metadata.txt | head -n 1)"
+          test -n "$version"
+          tag="media-organizer-ci-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"
+
+          # One new immutable-by-tag source snapshot for each successful master build.
+          gh release create "$tag" \
+            dist/Media-Organizer.apk \
+            dist/Media-Organizer.apk.sha256 \
+            dist/apk-signature.txt \
+            dist/apk-metadata.txt \
+            dist/build-info.txt \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "Media Organizer v${version} (CI #${GITHUB_RUN_NUMBER})" \
+            --notes-file dist/build-info.txt \
+            --latest
+
+          # Never purge the existing release unless the new APK was published.
+          gh release view "$tag" --repo "$GITHUB_REPOSITORY" \
+            --json assets --jq '.assets[].name' | grep -Fxq 'Media-Organizer.apk'
+
+          # This repository intentionally retains exactly one GitHub Release.
+          # Preserve historical non-CI tags but remove tags created by this CI.
+          gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+            --jq '.[].tag_name' |
+            while IFS= read -r old_tag; do
+              [[ -n "$old_tag" && "$old_tag" != "$tag" ]] || continue
+              if [[ "$old_tag" == media-organizer-ci-* || "$old_tag" == latest-build ]]; then
+                gh release delete "$old_tag" --yes --cleanup-tag --repo "$GITHUB_REPOSITORY"
+              else
+                gh release delete "$old_tag" --yes --repo "$GITHUB_REPOSITORY"
+              fi
+            done
+          echo "Latest release: https://github.com/$GITHUB_REPOSITORY/releases/tag/$tag"
