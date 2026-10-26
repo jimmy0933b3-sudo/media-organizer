@@ -1,10 +1,10 @@
-# 相簿整理員 v1.0
+# 相簿整理員
 
 Android 11 以上的離線照片／影片整理工具。無網路權限，原始檔與人臉特徵不會上傳。
 
 ## 安裝與操作
 
-1. 在手機下載 `Media-Organizer-v1.0.apk`，允許下載來源安裝此應用程式後安裝。
+1. 在手機從 [GitHub Releases](https://github.com/jimmy0933b3-sudo/media-organizer/releases/latest) 下載 `Media-Organizer.apk`，允許下載來源安裝此應用程式後安裝。
 2. 點「開始掃描」，選擇授權所有照片與影片。Android 14 以上若只授權部分照片，只能分析所選檔案。
 3. 保持應用程式畫面開啟直到掃描完成。可按「停止」取消；不會更動原始媒體。
 4. 切換「重複／相似／人物／全部」。點縮圖或檔名，用手機原有播放器或相簿預覽。
@@ -34,7 +34,7 @@ Android 11 以上的離線照片／影片整理工具。無網路權限，原始
 
 使用 Android Studio 匯入此資料夾，JDK 17、Gradle 8.9、Android SDK 35，AGP 8.7.3。執行 `gradle :app:assembleDebug` 會產生可安裝 Debug APK。第一次需下載 Gradle／Android SDK／TensorFlow Lite 相依套件。本 ZIP 未包含 Gradle wrapper 或 Android SDK。
 
-交付 APK 與 Gradle 設定使用相同的本地測試簽章，已保留於 `signing/local-testing.p12`，方便重新編譯後更新安裝。密碼與別名已在 `app/build.gradle` 設定；此簽章只用於本機測試交付。若改用不同簽章，需先移除現有 APK，移除將使本程式快取與復原紀錄消失。
+GitHub Actions 發布的 Release APK 使用 Actions Secrets 提供的簽章金鑰，不會再使用公開的本地測試憑證 `signing/local-testing.p12`（該憑證仍用於本地 Debug）。若新金鑰與舊版 APK 不同，無法直接覆蓋更新，卸載舊版會失去本機快取與復原紀錄。請參閱 [BUILD-APK.md](BUILD-APK.md) 的必要 Secrets、簽章相容性及 CI Release 保留規則。
 
 ## 第三方來源
 
