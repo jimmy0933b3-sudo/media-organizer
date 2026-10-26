@@ -5,7 +5,39 @@ android {
  defaultConfig { applicationId 'tw.mediaorganizer'; minSdk 30; targetSdk 35; versionCode 10; versionName '1.7.3' }
  compileOptions { sourceCompatibility JavaVersion.VERSION_1_8; targetCompatibility JavaVersion.VERSION_1_8 }
  buildFeatures { buildConfig false }
- signingConfigs { localTesting { storeFile file('../signing/local-testing.p12'); storePassword 'mediaorganizer-dev'; keyAlias 'mediaorganizer'; keyPassword 'mediaorganizer-dev' } }
- buildTypes { debug { signingConfig signingConfigs.localTesting }; release { signingConfig signingConfigs.localTesting; minifyEnabled false } }
+ // Only use the keystore injected by GitHub Actions for distributable builds.
+ // Local builds without these values may produce unsigned release APKs; never
+ // silently fall back to the public local-testing certificate.
+ def signingVariables = ['ANDROID_KEYSTORE_FILE', 'ANDROID_KEYSTORE_PASSWORD',
+                         'ANDROID_KEY_ALIAS', 'ANDROID_KEY_PASSWORD']
+ def hasReleaseSigning = signingVariables.every { System.getenv(it)?.trim() }
+ if (project.hasProperty('requireReleaseSigning') && !hasReleaseSigning) {
+     throw new GradleException('Release signing requires the GitHub Actions keystore and credentials')
+ }
+ signingConfigs {
+     localTesting {
+         storeFile file('../signing/local-testing.p12')
+         storePassword 'mediaorganizer-dev'
+         keyAlias 'mediaorganizer'
+         keyPassword 'mediaorganizer-dev'
+     }
+     if (hasReleaseSigning) {
+         actionsRelease {
+             storeFile file(System.getenv('ANDROID_KEYSTORE_FILE'))
+             storePassword System.getenv('ANDROID_KEYSTORE_PASSWORD')
+             keyAlias System.getenv('ANDROID_KEY_ALIAS')
+             keyPassword System.getenv('ANDROID_KEY_PASSWORD')
+         }
+     }
+ }
+ buildTypes {
+     debug { signingConfig signingConfigs.localTesting }
+     release {
+         if (hasReleaseSigning) {
+             signingConfig signingConfigs.actionsRelease
+         }
+         minifyEnabled false
+     }
+ }
 }
 dependencies { implementation 'org.tensorflow:tensorflow-lite:2.16.1'; implementation 'androidx.recyclerview:recyclerview:1.3.2'; implementation 'androidx.appcompat:appcompat:1.7.0'; constraints { implementation("org.jetbrains.kotlin:kotlin-stdlib-jdk7:1.8.22") { because("kotlin-stdlib-jdk7 is now a part of kotlin-stdlib") }; implementation("org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.8.22") { because("kotlin-stdlib-jdk8 is now a part of kotlin-stdlib") } } }
