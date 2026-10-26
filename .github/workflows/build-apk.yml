@@ -2,6 +2,8 @@ name: Build signed APK
 
 on:
   push:
+    branches:
+      - master
   workflow_dispatch:
 
 permissions:
@@ -139,7 +141,8 @@ jobs:
   smoke_test:
     needs: build
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    # Android emulator startup and repeated cold launches can exceed 20 minutes.
+    timeout-minutes: 35
     strategy:
       fail-fast: false
       matrix:
