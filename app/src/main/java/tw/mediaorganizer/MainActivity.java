@@ -21,6 +21,7 @@ public class MainActivity extends AppCompatActivity implements ScanService.ScanL
  private final int STROKE=0xff304357,DANGER=0xffFFC0B5;
  private EditText searchInput;
  private final TextView[] statValues=new TextView[4];
+ private View introBanner;
  private FrameLayout root;
  private LinearLayout mainContent;
  private androidx.recyclerview.widget.RecyclerView list;
@@ -87,6 +88,8 @@ public class MainActivity extends AppCompatActivity implements ScanService.ScanL
  private void updateOverview(){
   if(result==null)return;
   int visible=0;for(Scanner.Item i:result.all)if(!i.removed)visible++;
+  // Show the onboarding hero before the first scan; give results more space afterward.
+  if(introBanner!=null)introBanner.setVisibility(visible==0?View.VISIBLE:View.GONE);
   int[] counts={visible,countGroups(result.exact),countGroups(result.similar),countGroups(result.people)};
   for(int i=0;i<4;i++)if(statValues[i]!=null)statValues[i].setText(String.format(Locale.TAIWAN,"%,d",counts[i]));
   if(tabButtons!=null){
@@ -161,7 +164,7 @@ public class MainActivity extends AppCompatActivity implements ScanService.ScanL
    TextView heroTitle=text("給相簿一次大掃除",18);heroTitle.setTypeface(null,Typeface.BOLD);
    TextView heroTip=text("本機比對重複、相似與人物，原始照片不會上傳。",12);
    heroTip.setTextColor(0xffC9DEEB);heroTip.setMaxLines(2);
-   hero.addView(heroTitle);hero.addView(heroTip);
+   hero.addView(heroTitle);hero.addView(heroTip);introBanner=hero;
    LinearLayout.LayoutParams heroLp=new LinearLayout.LayoutParams(-1,-2);heroLp.setMargins(0,0,0,dp(10));
    mainContent.addView(hero,heroLp);
    LinearLayout stats=new LinearLayout(this);stats.setWeightSum(4);
@@ -593,9 +596,11 @@ public class MainActivity extends AppCompatActivity implements ScanService.ScanL
              View v = holder.itemView;
              ((TextView)v.findViewById(101)).setText(item.text);
               Button quick=v.findViewById(104);
-              boolean safeBulk=mode==0||mode==3;
+              boolean safeBulk=(mode==0||mode==3)&&
+                (searchInput==null||searchInput.getText().toString().trim().isEmpty());
               quick.setEnabled(safeBulk);
               quick.setText(mode==0?"選取重複副本":mode==3?"選取此檔":"請逐一檢視勾選");
+              if(!safeBulk&&mode==0)quick.setText("搜尋時請逐一勾選");
              ImageView face = v.findViewById(102); TextView faceLabel = v.findViewById(103);
              if (mode == 2 && item.group.face != null) {
                  face.setVisibility(View.VISIBLE); faceLabel.setVisibility(View.VISIBLE);
