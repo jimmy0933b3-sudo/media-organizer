@@ -210,6 +210,7 @@ public class MainActivity extends AppCompatActivity implements ScanService.ScanL
    mainContent.addView(status);
 
    searchInput=new EditText(this);
+   searchInput.setId(R.id.search_input);
    searchInput.setSingleLine(true);searchInput.setTextSize(13);searchInput.setTextColor(TEXT);
    searchInput.setHintTextColor(TEXT_SEC);searchInput.setHint("搜尋檔名、資料夾");
    searchInput.setContentDescription("搜尋掃描結果");
