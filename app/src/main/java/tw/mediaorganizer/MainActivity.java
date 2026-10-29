@@ -493,7 +493,7 @@ public class MainActivity extends AppCompatActivity implements ScanService.ScanL
                                            oldItem.item.path.equals(newItem.item.path);
                      return oldItem.checked == newItem.checked && oldItem.video == newItem.video && sameThumb && sameContent;
                  }
-                 return true;
+                 return java.util.Objects.equals(oldItem.text,newItem.text);
              }
          });
                  data = newData;
@@ -503,10 +503,10 @@ public class MainActivity extends AppCompatActivity implements ScanService.ScanL
      public androidx.recyclerview.widget.RecyclerView.ViewHolder onCreateViewHolder(android.view.ViewGroup parent, int viewType) {
          if (viewType == 3) {
              LinearLayout empty = new LinearLayout(MainActivity.this); empty.setOrientation(1); empty.setGravity(Gravity.CENTER);
-             empty.setPadding(0, dp(40), 0, dp(40));
+             empty.setPadding(dp(16),dp(36),dp(16),dp(36));empty.setBackground(surface(CARD,16,STROKE));
              ImageView icon = new ImageView(MainActivity.this); icon.setImageResource(R.drawable.ic_empty);
              empty.addView(icon, new LinearLayout.LayoutParams(dp(64), dp(64)));
-             TextView desc = text("", 14); desc.setGravity(Gravity.CENTER); desc.setTextColor(TEXT_SEC);
+             TextView desc = text("", 14); desc.setGravity(Gravity.CENTER); desc.setTextColor(TEXT_SEC);desc.setLineSpacing(dp(4),1f);
              LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2); lp.setMargins(0, dp(16), 0, 0);
              empty.addView(desc, lp);
              return new RecyclerView.ViewHolder(empty) {};
@@ -529,33 +529,42 @@ public class MainActivity extends AppCompatActivity implements ScanService.ScanL
                 gd.setColor(CARD);
                 gd.setCornerRadius(dp(12));
                 card.setBackground(gd);
-                card.setPadding(dp(12), dp(12), dp(12), dp(12));
+                card.setPadding(dp(14),dp(12),dp(14),dp(12));
              TextView title = text("", 14); title.setTypeface(null,1); title.setId(101); card.addView(title);
              ImageView face = new ImageView(MainActivity.this); face.setId(102); face.setVisibility(View.GONE); card.addView(face, new LinearLayout.LayoutParams(dp(72),dp(72)));
              TextView faceLabel = text("此分組只代表至少一張抽樣人臉接近；多人、側臉或模糊畫面可能誤判。", 11); faceLabel.setId(103); faceLabel.setVisibility(View.GONE); card.addView(faceLabel);
              LinearLayout tools = new LinearLayout(MainActivity.this);
-             Button checkAll = button("選取其餘項目", null); checkAll.setId(104); tools.addView(checkAll, new LinearLayout.LayoutParams(0, dp(40), 1));
-             Button uncheckAll = button("取消此組", null); uncheckAll.setId(105); tools.addView(uncheckAll, new LinearLayout.LayoutParams(0, dp(40), 1));
+             Button checkAll=button("選取重複副本",null);checkAll.setId(104);
+              LinearLayout.LayoutParams selectLp=new LinearLayout.LayoutParams(0,dp(44),1);
+              selectLp.setMargins(0,0,dp(8),0);tools.addView(checkAll,selectLp);
+             Button uncheckAll=button("清除此組選取",null);uncheckAll.setId(105);
+              tools.addView(uncheckAll,new LinearLayout.LayoutParams(0,dp(44),1));
              card.addView(tools);
              return new RecyclerView.ViewHolder(card) {};
          } else {
-             LinearLayout row = new LinearLayout(MainActivity.this); row.setGravity(Gravity.CENTER_VERTICAL); row.setLayoutParams(new RecyclerView.LayoutParams(-1, -2));
+             LinearLayout row = new LinearLayout(MainActivity.this); row.setGravity(Gravity.CENTER_VERTICAL);row.setPadding(dp(6),dp(6),dp(9),dp(6));
+              RecyclerView.LayoutParams itemLp=new RecyclerView.LayoutParams(-1,-2);
+              itemLp.setMargins(0,0,0,dp(7));row.setLayoutParams(itemLp);
                 android.graphics.drawable.GradientDrawable gd = new android.graphics.drawable.GradientDrawable();
-                gd.setColor(0xff333333);
-                gd.setCornerRadius(dp(8));
+                gd.setColor(CARD);
+                gd.setCornerRadius(dp(14));gd.setStroke(dp(1),STROKE);
                 row.setBackground(gd);
-             CheckBox box = new CheckBox(MainActivity.this); box.setId(201); row.addView(box, new LinearLayout.LayoutParams(dp(40),dp(96)));
+             CheckBox box = new CheckBox(MainActivity.this); box.setId(201); box.setButtonTintList(android.content.res.ColorStateList.valueOf(ACCENT));
+              row.addView(box,new LinearLayout.LayoutParams(dp(40),dp(82)));
              FrameLayout thumbContainer = new FrameLayout(MainActivity.this);
              ImageView thumb = new ImageView(MainActivity.this); thumb.setId(202); thumb.setScaleType(ImageView.ScaleType.CENTER_CROP);
-             thumbContainer.addView(thumb, new FrameLayout.LayoutParams(dp(96),dp(96)));
+             thumbContainer.addView(thumb,new FrameLayout.LayoutParams(dp(82),dp(82)));
              ImageView videoIcon = new ImageView(MainActivity.this); videoIcon.setId(205); videoIcon.setImageResource(R.drawable.ic_video); videoIcon.setVisibility(View.GONE);
              FrameLayout.LayoutParams vidLp = new FrameLayout.LayoutParams(dp(24), dp(24), Gravity.BOTTOM | Gravity.START);
              vidLp.setMargins(dp(4), 0, 0, dp(4));
              thumbContainer.addView(videoIcon, vidLp);
-             row.addView(thumbContainer, new LinearLayout.LayoutParams(dp(96),dp(96)));
-             TextView label = text("", 11); label.setId(203); label.setMaxLines(2); label.setEllipsize(android.text.TextUtils.TruncateAt.END);
+             thumbContainer.setBackground(surface(0xff31485A,10,0));thumb.setClipToOutline(true);
+              row.addView(thumbContainer,new LinearLayout.LayoutParams(dp(82),dp(82)));
+             TextView label=text("",12);label.setId(203);label.setMaxLines(3); label.setEllipsize(android.text.TextUtils.TruncateAt.END);
              LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0,-2,1); lp.setMargins(dp(8),0,0,0); row.addView(label, lp);
-             FrameLayout mask = new FrameLayout(MainActivity.this); mask.setId(204); mask.setBackgroundColor(0x3372d9c3); mask.setVisibility(View.GONE); row.addView(mask, new LinearLayout.LayoutParams(-1, -1));
+             View marker=new View(MainActivity.this);marker.setId(204);marker.setBackground(surface(ACCENT,4,0));
+              marker.setVisibility(View.GONE);marker.setClickable(false);
+              row.addView(marker,new LinearLayout.LayoutParams(dp(4),dp(60)));
              return new RecyclerView.ViewHolder(row) {};
          }
      }
@@ -581,13 +590,18 @@ public class MainActivity extends AppCompatActivity implements ScanService.ScanL
              }
          } else if (item.type == 1) {
              View v = holder.itemView;
-             ((TextView)v.findViewById(101)).setText(item.group.title);
+             ((TextView)v.findViewById(101)).setText(item.text);
+              Button quick=v.findViewById(104);
+              boolean safeBulk=mode==0||mode==3;
+              quick.setEnabled(safeBulk);
+              quick.setText(mode==0?"選取重複副本":mode==3?"選取此檔":"請逐一檢視勾選");
              ImageView face = v.findViewById(102); TextView faceLabel = v.findViewById(103);
              if (mode == 2 && item.group.face != null) {
                  face.setVisibility(View.VISIBLE); faceLabel.setVisibility(View.VISIBLE);
                  face.setImageBitmap(BitmapFactory.decodeFile(item.group.face.getPath()));
              } else { face.setVisibility(View.GONE); faceLabel.setVisibility(View.GONE); }
              v.findViewById(104).setOnClickListener(btn -> {
+                 if(!safeBulk)return;
                  if(mode==3){selected.addAll(item.group.items);}
                  else if(!item.group.items.isEmpty()){
                      List<Scanner.Item> active = new ArrayList<>();
