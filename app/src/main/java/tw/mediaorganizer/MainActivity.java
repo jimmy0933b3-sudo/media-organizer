@@ -254,34 +254,25 @@ public class MainActivity extends AppCompatActivity implements ScanService.ScanL
   list = new RecyclerView(this); list.setLayoutManager(new LinearLayoutManager(this)); adapter = new ItemAdapter(); list.setAdapter(adapter); mainContent.addView(list, new LinearLayout.LayoutParams(-1,0,1));
   selection=text("已選 0 個",14);
 
-  LinearLayout footerContainer = new LinearLayout(this);
-  footerContainer.setOrientation(1);
-  footerContainer.setBackgroundColor(CARD);
-  footerContainer.setPadding(dp(16), dp(12), dp(16), dp(12));
-
-  if (selection.getParent() != null) ((ViewGroup)selection.getParent()).removeView(selection);
-  footerContainer.addView(selection, new LinearLayout.LayoutParams(-1, -2));
-  selection.setPadding(0, 0, 0, dp(8));
-
-  LinearLayout footer=new LinearLayout(this);
-  move=button("移到此資料夾",this::confirmMove);
-  deleteBtn=button("刪除所選檔",this::confirmDelete);
-  Button clear=button("取消勾選",()->{selected.clear();render();});
-
-  LinearLayout.LayoutParams moveParams = new LinearLayout.LayoutParams(0, dp(46), 1);
-  moveParams.setMargins(0, 0, dp(8), 0);
-  footer.addView(move, moveParams);
-
-  LinearLayout.LayoutParams delParams = new LinearLayout.LayoutParams(0, dp(46), 1);
-  delParams.setMargins(0, 0, dp(8), 0);
-  footer.addView(deleteBtn, delParams);
-
-  footer.addView(clear,new LinearLayout.LayoutParams(dp(90),dp(46)));
-
-  footerContainer.addView(footer);
-  footerContainer.setVisibility(View.GONE);
-  this.footerContainer = footerContainer;
-  mainContent.addView(footerContainer, new LinearLayout.LayoutParams(-1, -2));
+  LinearLayout footerContainer=new LinearLayout(this);
+   footerContainer.setOrientation(1);footerContainer.setPadding(dp(12),dp(10),dp(12),dp(12));
+   footerContainer.setBackground(surface(CARD,18,STROKE));
+   LinearLayout selectionRow=new LinearLayout(this);selectionRow.setGravity(Gravity.CENTER_VERTICAL);
+   selection.setTypeface(null,Typeface.BOLD);selectionRow.addView(selection,new LinearLayout.LayoutParams(0,-2,1));
+   Button clear=button("清除選取",()->{selected.clear();render();});
+   clear.setTextColor(TEXT_SEC);
+   selectionRow.addView(clear,new LinearLayout.LayoutParams(dp(96),dp(42)));
+   footerContainer.addView(selectionRow);
+   LinearLayout footer=new LinearLayout(this);
+   move=button("移動到資料夾",this::confirmMove);move.setTypeface(null,Typeface.BOLD);
+   move.setTextColor(BG);move.setBackground(surface(ACCENT,14,0));
+   deleteBtn=button("刪除所選",this::confirmDelete);
+   deleteBtn.setTextColor(DANGER);deleteBtn.setBackground(surface(0xff422C36,14,0xff76505D));
+   LinearLayout.LayoutParams moveParams=new LinearLayout.LayoutParams(0,dp(50),1);
+   moveParams.setMargins(0,0,dp(8),0);footer.addView(move,moveParams);
+   footer.addView(deleteBtn,new LinearLayout.LayoutParams(0,dp(50),1));
+   footerContainer.addView(footer);footerContainer.setVisibility(View.GONE);
+   this.footerContainer=footerContainer;mainContent.addView(footerContainer,new LinearLayout.LayoutParams(-1,-2));
 
   resultGeneration=ScanService.getGeneration();
   Scanner.Result cached=loadScanCache();
