@@ -17,7 +17,10 @@ import org.json.*;
 
 import androidx.appcompat.app.AppCompatActivity;
 public class MainActivity extends AppCompatActivity implements ScanService.ScanListener {
- private final int BG=0xff0F1720,CARD=0xff182330,TEXT=0xffF1F5F9,ACCENT=0xff53D6BD,BUTTON_BG=0xff333333,TEXT_SEC=0xffA8B6C7;
+ private final int BG=0xff0B1220,CARD=0xff19283B,TEXT=0xffF4F8FF,ACCENT=0xff5DE1C4,BUTTON_BG=0xff26374C,TEXT_SEC=0xffADBED1;
+ private final int STROKE=0xff304357,DANGER=0xffFFC0B5;
+ private EditText searchInput;
+ private final TextView[] statValues=new TextView[4];
  private FrameLayout root;
  private LinearLayout mainContent;
  private androidx.recyclerview.widget.RecyclerView list;
@@ -53,23 +56,43 @@ public class MainActivity extends AppCompatActivity implements ScanService.ScanL
 
  private int dp(int n){return (int)(n*getResources().getDisplayMetrics().density);}
  private TextView text(String s,int size){TextView t=new TextView(this);t.setText(s);t.setTextColor(TEXT);t.setTextSize(size);t.setPadding(0,dp(5),0,dp(5));return t;}
- private Button button(String s,Runnable r){
-  Button b=new Button(this);
-  b.setText(s);
-  b.setTextColor(TEXT);
-  b.setAllCaps(false);
-
-  android.graphics.drawable.GradientDrawable gd = new android.graphics.drawable.GradientDrawable();
-  gd.setColor(BUTTON_BG);
-  gd.setCornerRadius(dp(8));
-  b.setBackground(gd);
-
-  b.setOnClickListener(v->{
-   v.setAlpha(0.7f);
-   v.postDelayed(() -> v.setAlpha(1.0f), 100);
-   r.run();
-  });
+ private android.graphics.drawable.GradientDrawable surface(int fill,int radius,int border){
+  android.graphics.drawable.GradientDrawable d=new android.graphics.drawable.GradientDrawable();
+  d.setColor(fill);d.setCornerRadius(dp(radius));if(border!=0)d.setStroke(dp(1),border);
+  return d;
+ }
+ private Button button(String label,Runnable action){
+  Button b=new Button(this);b.setText(label);b.setAllCaps(false);b.setTextSize(13);
+  b.setTextColor(TEXT);b.setBackground(surface(BUTTON_BG,14,STROKE));
+  b.setPadding(dp(8),0,dp(8),0);
+  b.setOnClickListener(v->{if(action!=null)action.run();});
   return b;
+ }
+ private View statCard(String caption,int index){
+  LinearLayout card=new LinearLayout(this);card.setOrientation(1);card.setGravity(Gravity.CENTER_VERTICAL);
+  card.setPadding(dp(9),dp(8),dp(5),dp(8));card.setBackground(surface(CARD,14,STROKE));
+  TextView num=text("0",20);num.setTypeface(null,Typeface.BOLD);num.setTextColor(index==1?ACCENT:TEXT);
+  num.setSingleLine(true);num.setEllipsize(android.text.TextUtils.TruncateAt.END);
+  TextView name=text(caption,11);name.setTextColor(TEXT_SEC);card.addView(num);card.addView(name);
+  statValues[index]=num;return card;
+ }
+ private int countGroups(List<Scanner.Group> groups){
+  if(groups==null)return 0;
+  int total=0;for(Scanner.Group g:groups){
+   int visible=0;for(Scanner.Item i:g.items)if(!i.removed)visible++;
+   if(visible>1)total++;
+  }
+  return total;
+ }
+ private void updateOverview(){
+  if(result==null)return;
+  int visible=0;for(Scanner.Item i:result.all)if(!i.removed)visible++;
+  int[] counts={visible,countGroups(result.exact),countGroups(result.similar),countGroups(result.people)};
+  for(int i=0;i<4;i++)if(statValues[i]!=null)statValues[i].setText(String.format(Locale.TAIWAN,"%,d",counts[i]));
+  if(tabButtons!=null){
+   String[] names={"重複","相似","人物","全部"};int[] values={counts[1],counts[2],counts[3],counts[0]};
+   for(int i=0;i<4;i++)if(tabButtons[i]!=null)tabButtons[i].setText(names[i]+"\n"+String.format(Locale.TAIWAN,"%,d",values[i]));
+  }
  }
  private void build(){
   root = new FrameLayout(this);
