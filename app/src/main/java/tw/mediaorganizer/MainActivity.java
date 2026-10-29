@@ -119,12 +119,14 @@ public class MainActivity extends AppCompatActivity implements ScanService.ScanL
   LinearLayout headerTitles=new LinearLayout(this);headerTitles.setOrientation(1);
   String verName="1.4";
   try{verName=getPackageManager().getPackageInfo(getPackageName(),0).versionName;}catch(Exception e){}
-  TextView title=text("相簿整理員",24);title.setTypeface(null,1);headerTitles.addView(title);
+  TextView title=text("相簿整理員",26);title.setTypeface(null,Typeface.BOLD);headerTitles.addView(title);
+   TextView subtitle=text("私密・離線・安心整理",11);subtitle.setTextColor(ACCENT);headerTitles.addView(subtitle);
   header.addView(headerTitles,new LinearLayout.LayoutParams(0,-2,1));
   ImageView settingsBtn = new ImageView(this);
   settingsBtn.setId(R.id.btn_settings);
   settingsBtn.setContentDescription(getString(R.string.desc_settings));
   settingsBtn.setImageResource(R.drawable.ic_settings);
+   settingsBtn.setColorFilter(TEXT);settingsBtn.setBackground(surface(CARD,14,STROKE));
   settingsBtn.setPadding(dp(12), dp(12), dp(12), dp(12));
   android.util.TypedValue outValue = new android.util.TypedValue();
   if (getTheme().resolveAttribute(android.R.attr.selectableItemBackgroundBorderless, outValue, true)) {
@@ -152,7 +154,27 @@ public class MainActivity extends AppCompatActivity implements ScanService.ScanL
 
   srcLabel=text(" 來源：全部媒體",12);
 
-  LinearLayout actions=new LinearLayout(this);
+  LinearLayout hero=new LinearLayout(this);hero.setOrientation(1);hero.setPadding(dp(16),dp(11),dp(16),dp(11));
+   android.graphics.drawable.GradientDrawable heroBackground=new android.graphics.drawable.GradientDrawable(
+     android.graphics.drawable.GradientDrawable.Orientation.TL_BR,new int[]{0xff244B59,0xff163045,0xff15233A});
+   heroBackground.setCornerRadius(dp(18));hero.setBackground(heroBackground);
+   TextView heroTitle=text("給相簿一次大掃除",18);heroTitle.setTypeface(null,Typeface.BOLD);
+   TextView heroTip=text("本機比對重複、相似與人物，原始照片不會上傳。",12);
+   heroTip.setTextColor(0xffC9DEEB);heroTip.setMaxLines(2);
+   hero.addView(heroTitle);hero.addView(heroTip);
+   LinearLayout.LayoutParams heroLp=new LinearLayout.LayoutParams(-1,-2);heroLp.setMargins(0,0,0,dp(10));
+   mainContent.addView(hero,heroLp);
+   LinearLayout stats=new LinearLayout(this);stats.setWeightSum(4);
+   String[] namesStat={"已掃描","重複組","相似組","人物組"};
+   for(int i=0;i<4;i++){
+     LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(0,-2,1);
+     if(i>0)lp.setMargins(dp(5),0,0,0);
+     stats.addView(statCard(namesStat[i],i),lp);
+   }
+   LinearLayout.LayoutParams statLp=new LinearLayout.LayoutParams(-1,-2);
+   statLp.setMargins(0,0,0,dp(10));mainContent.addView(stats,statLp);
+
+   LinearLayout actions=new LinearLayout(this);
   scan=button("開始掃描",this::requestScan);
   android.graphics.drawable.StateListDrawable sld = new android.graphics.drawable.StateListDrawable();
   android.graphics.drawable.GradientDrawable gdDisabled = new android.graphics.drawable.GradientDrawable();
@@ -163,7 +185,7 @@ public class MainActivity extends AppCompatActivity implements ScanService.ScanL
   gdEnabled.setCornerRadius(dp(8));
   sld.addState(new int[]{-android.R.attr.state_enabled}, gdDisabled);
   sld.addState(new int[]{}, gdEnabled);
-  scan.setBackground(sld);
+  scan.setBackground(sld);scan.setText("開始智慧掃描");scan.setTypeface(null,Typeface.BOLD);
 
   android.content.res.ColorStateList textColorStateList = new android.content.res.ColorStateList(
         new int[][]{new int[]{-android.R.attr.state_enabled}, new int[]{}},
@@ -182,49 +204,53 @@ public class MainActivity extends AppCompatActivity implements ScanService.ScanL
   actions.addView(cancel, new LinearLayout.LayoutParams(dp(80), dp(48)));
   mainContent.addView(actions);
 
-  status=text("授權後可掃描手機相簿。僅能讀取 Android 允許的檔案。",12);mainContent.addView(status);
-  LinearLayout tabs=new LinearLayout(this);
-  tabs.setWeightSum(4);
-  android.graphics.drawable.GradientDrawable tabBg = new android.graphics.drawable.GradientDrawable();
-  tabBg.setColor(CARD);
-  tabBg.setCornerRadius(dp(8));
-  tabs.setBackground(tabBg);
-  tabs.setPadding(dp(4), dp(4), dp(4), dp(4));
-  String[] names={"重複","相似","人物","全部"};
-  tabButtons = new TextView[4];
-  for(int i=0;i<4;i++){
-    final int idx=i;
-    TextView tab=new TextView(this);
-    tab.setText(names[i]);
-    tab.setGravity(Gravity.CENTER);
-    tab.setTextSize(14);
-    tab.setTextColor(i==0?BG:TEXT_SEC);
+  status=text("準備就緒。開始掃描後可逐步檢視結果。",12);
+   status.setTextColor(TEXT_SEC);status.setMaxLines(3);
+   status.setEllipsize(android.text.TextUtils.TruncateAt.END);status.setPadding(dp(4),dp(8),dp(4),dp(9));
+   mainContent.addView(status);
 
-    android.graphics.drawable.GradientDrawable activeBg = new android.graphics.drawable.GradientDrawable();
-    activeBg.setColor(ACCENT);
-    activeBg.setCornerRadius(dp(6));
-
-    if (i==0) tab.setBackground(activeBg);
-    else tab.setBackgroundColor(Color.TRANSPARENT);
-
-    tab.setOnClickListener(v->{
-      mode=idx;limit=20;
-      for(int j=0;j<4;j++) {
-        tabButtons[j].setTextColor(j==idx?BG:TEXT_SEC);
-        if(j==idx) tabButtons[j].setBackground(activeBg);
-        else tabButtons[j].setBackgroundColor(Color.TRANSPARENT);
-      }
-      render();
-    });
-    LinearLayout.LayoutParams tabParams = new LinearLayout.LayoutParams(0, dp(36), 1);
-    tabParams.setMargins(dp(2), 0, dp(2), 0);
-    tab.setLayoutParams(tabParams);
-    tabButtons[i] = tab;
-    tabs.addView(tab);
-  }
-  LinearLayout.LayoutParams tabsLp = new LinearLayout.LayoutParams(-1, -2);
-  tabsLp.setMargins(0, dp(16), 0, dp(16));
-  mainContent.addView(tabs, tabsLp);
+   searchInput=new EditText(this);
+   searchInput.setSingleLine(true);searchInput.setTextSize(13);searchInput.setTextColor(TEXT);
+   searchInput.setHintTextColor(TEXT_SEC);searchInput.setHint("搜尋檔名、資料夾");
+   searchInput.setContentDescription("搜尋掃描結果");
+   searchInput.setImeOptions(android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH);
+   searchInput.setPadding(dp(14),0,dp(14),0);searchInput.setBackground(surface(CARD,14,STROKE));
+   searchInput.addTextChangedListener(new android.text.TextWatcher(){
+     public void beforeTextChanged(CharSequence value,int start,int count,int after){}
+     public void onTextChanged(CharSequence value,int start,int before,int count){limit=20;expandedGroups.clear();render();}
+     public void afterTextChanged(android.text.Editable value){}
+   });
+   mainContent.addView(searchInput,new LinearLayout.LayoutParams(-1,dp(46)));
+   TextView listTitle=text("掃描結果  ·  點選縮圖預覽",12);listTitle.setTextColor(TEXT_SEC);
+   LinearLayout.LayoutParams listTitleLp=new LinearLayout.LayoutParams(-1,-2);
+   listTitleLp.setMargins(0,dp(5),0,dp(1));mainContent.addView(listTitle,listTitleLp);
+  LinearLayout tabs=new LinearLayout(this);tabs.setWeightSum(4);
+   tabs.setBackground(surface(CARD,14,STROKE));tabs.setPadding(dp(4),dp(4),dp(4),dp(4));
+   String[] names={"重複","相似","人物","全部"};
+   tabButtons=new TextView[4];
+   for(int i=0;i<4;i++){
+     final int idx=i;
+     TextView tab=new TextView(this);tab.setText(names[i]+"\n0");
+     tab.setGravity(Gravity.CENTER);tab.setTextSize(12);
+     tab.setTextColor(i==mode?BG:TEXT_SEC);
+     tab.setTypeface(null,i==mode?Typeface.BOLD:Typeface.NORMAL);
+     tab.setBackground(surface(i==mode?ACCENT:CARD,11,0));
+     tab.setContentDescription(names[i]+"分類");
+     tab.setOnClickListener(v->{
+       mode=idx;limit=20;
+       for(int j=0;j<4;j++){
+         tabButtons[j].setTextColor(j==idx?BG:TEXT_SEC);
+         tabButtons[j].setTypeface(null,j==idx?Typeface.BOLD:Typeface.NORMAL);
+         tabButtons[j].setBackground(surface(j==idx?ACCENT:CARD,11,0));
+       }
+       render();
+     });
+     LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(0,dp(48),1);
+     if(i>0)lp.setMargins(dp(2),0,0,0);
+     tabs.addView(tab,lp);tabButtons[i]=tab;
+   }
+   LinearLayout.LayoutParams tabsLp=new LinearLayout.LayoutParams(-1,-2);
+   tabsLp.setMargins(0,0,0,dp(8));mainContent.addView(tabs,tabsLp);
   list = new RecyclerView(this); list.setLayoutManager(new LinearLayoutManager(this)); adapter = new ItemAdapter(); list.setAdapter(adapter); mainContent.addView(list, new LinearLayout.LayoutParams(-1,0,1));
   selection=text("已選 0 個",14);
 
