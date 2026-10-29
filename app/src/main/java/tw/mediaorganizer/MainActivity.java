@@ -740,6 +740,7 @@ public int getItemCount() { return data.size(); }
   backBtn.setId(R.id.btn_back);
   backBtn.setContentDescription(getString(R.string.desc_back));
   backBtn.setImageResource(R.drawable.ic_back);
+  backBtn.setColorFilter(TEXT);backBtn.setBackground(surface(CARD,14,STROKE));
   backBtn.setPadding(dp(12), dp(12), dp(12), dp(12));
   android.util.TypedValue outValueBack = new android.util.TypedValue();
   if (getTheme().resolveAttribute(android.R.attr.selectableItemBackgroundBorderless, outValueBack, true)) {
@@ -846,20 +847,16 @@ public int getItemCount() { return data.size(); }
 
  private TextView settingsTitle(String titleText) {
      TextView t = text(titleText, 14);
-     t.setTextColor(TEXT_SEC);
-     t.setPadding(dp(8), dp(16), 0, dp(8));
+     t.setTextColor(ACCENT);t.setTypeface(null,Typeface.BOLD);
+     t.setPadding(dp(8), dp(18), 0, dp(8));
      return t;
  }
 
- private LinearLayout createCard() {
-     LinearLayout card = new LinearLayout(this);
-     card.setOrientation(LinearLayout.VERTICAL);
-     android.graphics.drawable.GradientDrawable gd = new android.graphics.drawable.GradientDrawable();
-     gd.setColor(CARD);
-     gd.setCornerRadius(dp(16));
-     card.setBackground(gd);
-     card.setPadding(dp(16), dp(16), dp(16), dp(16));
-     return card;
+ private LinearLayout createCard(){
+  LinearLayout card=new LinearLayout(this);
+  card.setOrientation(1);card.setBackground(surface(CARD,16,STROKE));
+  card.setPadding(dp(16),dp(16),dp(16),dp(16));
+  return card;
  }
  private String format(long bytes){return String.format(Locale.TAIWAN,"%.1f MB",bytes/1048576.0);}
  private void updateSelection(){
@@ -903,6 +900,19 @@ public int getItemCount() { return data.size(); }
  private void confirmDelete(){
   if(selected.isEmpty()||op().fileBusy())return;
   ArrayList<Scanner.Item> snapshot=new ArrayList<>(selected);
+  long bytes=0;for(Scanner.Item item:snapshot)bytes+=Math.max(0,item.size);
+  String warning="將刪除 "+snapshot.size()+" 個檔案（"+format(bytes)+"）。\n\n"
+     +"這是真正刪除相簿中的原始檔案，不是從清單移除，App 無法復原。"
+     +"\n相似照片或人物群組不代表內容完全重複，請逐一預覽確認。";
+  new androidx.appcompat.app.AlertDialog.Builder(this)
+    .setTitle("確認刪除原始檔案？")
+    .setMessage(warning)
+    .setNegativeButton("保留檔案",null)
+    .setPositiveButton("確認刪除",(d,w)->beginDelete(snapshot))
+    .show();
+ }
+ private void beginDelete(ArrayList<Scanner.Item> snapshot){
+  if(snapshot.isEmpty()||busy||op().fileBusy())return;
   op().setPendingDeletes(snapshot);
   op().setDeleting(true);
   op().setFileBusy(true);
