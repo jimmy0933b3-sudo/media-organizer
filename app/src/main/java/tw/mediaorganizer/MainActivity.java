@@ -369,7 +369,7 @@ public class MainActivity extends AppCompatActivity implements ScanService.ScanL
  }
 
  private void startScan(){
-  selected.clear();result=new Scanner.Result();render();setBusy(true);
+  selected.clear();expandedGroups.clear();result=new Scanner.Result();render();setBusy(true);
   status.setText("掃描中，可即時查看結果與進行處理…");
   final boolean faces=people.isChecked();
   final boolean isBgScan=bgScan.isChecked();
@@ -643,36 +643,62 @@ public class MainActivity extends AppCompatActivity implements ScanService.ScanL
 public int getItemCount() { return data.size(); }
  }
  private void render() {
-  updateSelection();
-  List<ListItem> newData = new ArrayList<>();
+  updateSelection();updateOverview();
+  List<ListItem> newData=new ArrayList<>();
   if(result==null||result.all.isEmpty()){
-      newData.add(new ListItem(0, null, null, "先掃描，再選擇要整理的群組。\n" +
-"完全重複：檔案內容一致\n" +
-"相似：畫面接近，仍須人工查看\n" +
-"人物：抽樣人臉特徵接近，不保證同一人\n" +
-"註：掃描過程中即可勾選刪除或搬移！", false));
-      if (adapter != null) adapter.update(newData); return;
+   newData.add(new ListItem(3,null,null,"點選「開始智慧掃描」，讓照片更好找。\n完全重複可以精確比對，相似與人物請自行預覽確認。",false));
+   if(adapter!=null)adapter.update(newData);
+   return;
   }
+  String query=searchInput==null?"":searchInput.getText().toString().trim().toLowerCase(Locale.ROOT);
   List<Scanner.Group> groups=mode==0?result.exact:mode==1?result.similar:result.people;
-  if(mode==3){groups=new ArrayList<>();for(Scanner.Item item:result.all)if(!item.removed){Scanner.Group g=new Scanner.Group(item.video?"影片":"照片");g.items.add(item);groups.add(g);}}
-  int displayed=0;
+  if(mode==3){
+   groups=new ArrayList<>();
+   for(Scanner.Item file:result.all)if(!file.removed){
+    Scanner.Group single=new Scanner.Group(file.video?"影片":"照片");
+    single.items.add(file);groups.add(single);
+   }
+  }
+  int displayed=0;boolean more=false;
   for(Scanner.Group group:groups){
-      List<Scanner.Item> active=new ArrayList<>();for(Scanner.Item item:group.items)if(!item.removed)active.add(item);
-      if(active.size()<(mode==3?1:2))continue;
-      if(displayed++>=limit)break;
-      newData.add(new ListItem(1, group, null, null, false));
-      int count=0;
-      boolean expand = expandedGroups.contains(group);
-      for(Scanner.Item item:active){
-          if(!expand && count++>=12){newData.add(new ListItem(4, group, null, "大型群組：先顯示 12 個，點擊展開此群組全部檔案。", false));break;}
-          newData.add(new ListItem(2, group, item, null, selected.contains(item)));
-      }
+   List<Scanner.Item> active=new ArrayList<>();
+   for(Scanner.Item file:group.items)if(!file.removed)active.add(file);
+   if(active.size()<(mode==3?1:2))continue;
+   if(!query.isEmpty()){
+    List<Scanner.Item> matched=new ArrayList<>();
+    for(Scanner.Item file:active){
+     String name=file.name==null?"":file.name;
+     String path=file.path==null?"":file.path;
+     if(name.toLowerCase(Locale.ROOT).contains(query)||path.toLowerCase(Locale.ROOT).contains(query))matched.add(file);
+    }
+    if(matched.isEmpty())continue;
+    active=matched;
+   }
+   if(displayed>=limit){more=true;break;}
+   displayed++;
+   long bytes=0;for(Scanner.Item file:active)bytes+=Math.max(0,file.size);
+   int checked=0;for(Scanner.Item file:active)if(selected.contains(file))checked++;
+   String label=group.title+"   ·   "+active.size()+" 個檔案   ·   "+format(bytes);
+   if(checked>0)label+="   ·   已選 "+checked;
+   newData.add(new ListItem(1,group,null,label,false));
+   boolean expand=expandedGroups.contains(group);
+   int count=0;
+   for(Scanner.Item file:active){
+    if(!expand&&count++>=12){
+     newData.add(new ListItem(4,group,null,"展開此組全部 "+active.size()+" 個檔案",false));
+     break;
+    }
+    newData.add(new ListItem(2,group,file,null,selected.contains(file)));
+   }
   }
-  if(displayed>limit) newData.add(new ListItem(5, null, null, "顯示更多群組...", false));
-  if(displayed==0) {
-      newData.add(new ListItem(3, null, null, mode==2?"沒有跨檔案的人物群組。需有清楚正面人臉；人物分析選項須在掃描前啟用。":"此分類尚無符合項目，請嘗試查看其他分類。", false));
+  if(more)newData.add(new ListItem(5,null,null,"顯示更多群組",false));
+  if(displayed==0){
+   String empty=query.isEmpty()?
+     (mode==2?"尚無可比對的人物群組。可以啟用人物分析後重新掃描。":"這個分類目前沒有符合項目。可試試其他分類。"):
+     "沒有找到符合「"+query+"」的檔案。請換個關鍵字試試。";
+   newData.add(new ListItem(3,null,null,empty,false));
   }
-  if (adapter != null) adapter.update(newData);
+  if(adapter!=null)adapter.update(newData);
  }
  private Bitmap smallThumb(File file){BitmapFactory.Options options=new BitmapFactory.Options();options.inSampleSize=1;return BitmapFactory.decodeFile(file.getPath(),options);}
  private View settingsScreen;
