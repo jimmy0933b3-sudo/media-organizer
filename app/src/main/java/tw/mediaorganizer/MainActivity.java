@@ -19,7 +19,6 @@ import androidx.appcompat.app.AppCompatActivity;
 public class MainActivity extends AppCompatActivity implements ScanService.ScanListener {
  private final int BG=0xff0B1220,CARD=0xff19283B,TEXT=0xffF4F8FF,ACCENT=0xff5DE1C4,BUTTON_BG=0xff26374C,TEXT_SEC=0xffADBED1;
  private final int STROKE=0xff304357,DANGER=0xffFFC0B5;
- private EditText searchInput;
  private final TextView[] statValues=new TextView[4];
  private View introBanner;
  private FrameLayout root;
@@ -214,19 +213,6 @@ public class MainActivity extends AppCompatActivity implements ScanService.ScanL
    status.setEllipsize(android.text.TextUtils.TruncateAt.END);status.setPadding(dp(4),dp(8),dp(4),dp(9));
    mainContent.addView(status);
 
-   searchInput=new EditText(this);
-   searchInput.setId(R.id.search_input);
-   searchInput.setSingleLine(true);searchInput.setTextSize(13);searchInput.setTextColor(TEXT);
-   searchInput.setHintTextColor(TEXT_SEC);searchInput.setHint("搜尋檔名、資料夾");
-   searchInput.setContentDescription("搜尋掃描結果");
-   searchInput.setImeOptions(android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH);
-   searchInput.setPadding(dp(14),0,dp(14),0);searchInput.setBackground(surface(CARD,14,STROKE));
-   searchInput.addTextChangedListener(new android.text.TextWatcher(){
-     public void beforeTextChanged(CharSequence value,int start,int count,int after){}
-     public void onTextChanged(CharSequence value,int start,int before,int count){limit=20;expandedGroups.clear();render();}
-     public void afterTextChanged(android.text.Editable value){}
-   });
-   mainContent.addView(searchInput,new LinearLayout.LayoutParams(-1,dp(46)));
    TextView listTitle=text("掃描結果  ·  點選縮圖預覽",12);listTitle.setTextColor(TEXT_SEC);
    LinearLayout.LayoutParams listTitleLp=new LinearLayout.LayoutParams(-1,-2);
    listTitleLp.setMargins(0,dp(5),0,dp(1));mainContent.addView(listTitle,listTitleLp);
@@ -407,8 +393,8 @@ public class MainActivity extends AppCompatActivity implements ScanService.ScanL
   bgScan.setEnabled(!b);
   strictness.setEnabled(!b);
   mediaTypeSpinner.setEnabled(!b);
-  move.setEnabled(!selected.isEmpty()&&!op().fileBusy());
-  deleteBtn.setEnabled(!selected.isEmpty()&&!op().fileBusy());
+  move.setEnabled(!selected.isEmpty()&&!b&&!op().fileBusy());
+  deleteBtn.setEnabled(!selected.isEmpty()&&!b&&!op().fileBusy());
   if(b)getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
   else getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
  }
@@ -598,11 +584,9 @@ public class MainActivity extends AppCompatActivity implements ScanService.ScanL
              View v = holder.itemView;
              ((TextView)v.findViewById(101)).setText(item.text);
               Button quick=v.findViewById(104);
-              boolean safeBulk=(mode==0||mode==3)&&
-                (searchInput==null||searchInput.getText().toString().trim().isEmpty());
+              boolean safeBulk=mode==0||mode==3;
               quick.setEnabled(safeBulk);
               quick.setText(mode==0?"選取重複副本":mode==3?"選取此檔":"請逐一檢視勾選");
-              if(!safeBulk&&mode==0)quick.setText("搜尋時請逐一勾選");
              ImageView face = v.findViewById(102); TextView faceLabel = v.findViewById(103);
              if (mode == 2 && item.group.face != null) {
                  face.setVisibility(View.VISIBLE); faceLabel.setVisibility(View.VISIBLE);
@@ -657,8 +641,7 @@ public int getItemCount() { return data.size(); }
    if(adapter!=null)adapter.update(newData);
    return;
   }
-  String query=searchInput==null?"":searchInput.getText().toString().trim().toLowerCase(Locale.ROOT);
-  List<Scanner.Group> groups=mode==0?result.exact:mode==1?result.similar:result.people;
+    List<Scanner.Group> groups=mode==0?result.exact:mode==1?result.similar:result.people;
   if(mode==3){
    groups=new ArrayList<>();
    for(Scanner.Item file:result.all)if(!file.removed){
@@ -671,16 +654,6 @@ public int getItemCount() { return data.size(); }
    List<Scanner.Item> active=new ArrayList<>();
    for(Scanner.Item file:group.items)if(!file.removed)active.add(file);
    if(active.size()<(mode==3?1:2))continue;
-   if(!query.isEmpty()){
-    List<Scanner.Item> matched=new ArrayList<>();
-    for(Scanner.Item file:active){
-     String name=file.name==null?"":file.name;
-     String path=file.path==null?"":file.path;
-     if(name.toLowerCase(Locale.ROOT).contains(query)||path.toLowerCase(Locale.ROOT).contains(query))matched.add(file);
-    }
-    if(matched.isEmpty())continue;
-    active=matched;
-   }
    if(displayed>=limit){more=true;break;}
    displayed++;
    long bytes=0;for(Scanner.Item file:active)bytes+=Math.max(0,file.size);
@@ -700,12 +673,11 @@ public int getItemCount() { return data.size(); }
   }
   if(more)newData.add(new ListItem(5,null,null,"顯示更多群組",false));
   if(displayed==0){
-   String empty=query.isEmpty()?
-     (mode==2?"尚無可比對的人物群組。可以啟用人物分析後重新掃描。":"這個分類目前沒有符合項目。可試試其他分類。"):
-     "沒有找到符合「"+query+"」的檔案。請換個關鍵字試試。";
-   newData.add(new ListItem(3,null,null,empty,false));
-  }
-  if(adapter!=null)adapter.update(newData);
+    newData.add(new ListItem(3,null,null,mode==2?
+      "尚無可比對的人物群組。可啟用人物分析後重新掃描。":
+      "這個分類目前沒有符合項目。可試試其他分類。",false));
+   }
+   if(adapter!=null)adapter.update(newData);
  }
  private View settingsScreen;
  private void showSettingsDialog(){
@@ -855,20 +827,17 @@ public int getItemCount() { return data.size(); }
   long total=0;for(Scanner.Item i:selected)total+=i.size;
   selection.setText("已選 "+selected.size()+" 個 · "+format(total));
   if(scan!=null)scan.setEnabled(!busy&&!op().fileBusy());
-  if(move!=null)move.setEnabled(!selected.isEmpty()&&!op().fileBusy());
-  if(deleteBtn!=null)deleteBtn.setEnabled(!selected.isEmpty()&&!op().fileBusy());
+  if(move!=null)move.setEnabled(!selected.isEmpty()&&!busy&&!op().fileBusy());
+  if(deleteBtn!=null)deleteBtn.setEnabled(!selected.isEmpty()&&!busy&&!op().fileBusy());
   if(footerContainer!=null) footerContainer.setVisibility(selected.isEmpty() ? View.GONE : View.VISIBLE);
  }
  private void preview(Scanner.Item tapped) {
   // Include the whole active category, not just the first 12 rows or 20 groups.
-  // Keep the current search filter and dedupe items repeated across groups.
-  LinkedHashMap<String, Scanner.Item> ordered = new LinkedHashMap<>();
-  String query = searchInput == null ? "" :
-      searchInput.getText().toString().trim().toLowerCase(Locale.ROOT);
+  // Preserve the current category order and dedupe across groups.
   if (result != null) {
    if (mode == 3) {
     for (Scanner.Item item : result.all) {
-     if (!item.removed && matchesPreviewFilter(item, query))
+     if (!item.removed)
       ordered.putIfAbsent(item.uri.toString(), item);
     }
    } else {
@@ -879,7 +848,7 @@ public int getItemCount() { return data.size(); }
      for (Scanner.Item item : group.items) if (!item.removed) activeCount++;
      if (activeCount < 2) continue;
      for (Scanner.Item item : group.items) {
-      if (!item.removed && matchesPreviewFilter(item, query))
+      if (!item.removed)
        ordered.putIfAbsent(item.uri.toString(), item);
      }
     }
@@ -895,13 +864,6 @@ public int getItemCount() { return data.size(); }
    }
   }
   new MediaPreviewDialog(this, items, index).show();
- }
- private boolean matchesPreviewFilter(Scanner.Item item, String query) {
-  if (query.isEmpty()) return true;
-  String name = item.name == null ? "" : item.name;
-  String path = item.path == null ? "" : item.path;
-  return name.toLowerCase(Locale.ROOT).contains(query)
-      || path.toLowerCase(Locale.ROOT).contains(query);
  }
  private String validateDestination(String input){
   if(input==null)input="";input=input.trim();
