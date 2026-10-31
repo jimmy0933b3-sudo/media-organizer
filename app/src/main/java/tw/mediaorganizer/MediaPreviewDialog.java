@@ -45,7 +45,7 @@ import java.util.concurrent.RejectedExecutionException;
 final class MediaPreviewDialog {
     private static final int ACCENT=0xff92A9FF;
     private final Activity activity;
-    private final Dialog dialog;
+    private Dialog dialog;
     private final ArrayList<Scanner.Item> items;
     private final ExecutorService decoder=Executors.newSingleThreadExecutor();
     private final Handler handler=new Handler(Looper.getMainLooper());
