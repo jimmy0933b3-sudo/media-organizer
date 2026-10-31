@@ -1023,9 +1023,10 @@ private void confirmDelete(){
  if(snapshot.isEmpty()){status.setText("選取項目無效，請重新掃描。");return;}
  long bytes=0;for(Scanner.Item i:snapshot)bytes+=Math.max(0,i.size);
  new androidx.appcompat.app.AlertDialog.Builder(this).setTitle("確認刪除原始檔案？")
-  .setMessage("將刪除 "+snapshot.size()+" 個原始檔案（"+format(bytes)+"）。\n\n"
-   +"確認後還必須在 Android 系統授權視窗允許，才能真正刪除。"
-   +"\n\n本 App 無法復原刪除的檔案，相似與人物分組請先逐張確認。")
+  .setMessage("將永久刪除 "+snapshot.size()+" 個原始檔案（"+format(bytes)+"）。\n\n"
+   +(canManageMedia()?"媒體管理權限已開啟，Android 通常不會額外逐批確認。":
+      "尚未開啟一次授權，Android 可能再顯示系統刪除確認。")
+   +"\n\n刪除無法由本 App 復原，相似與人物分組請先逐張確認。")
   .setNegativeButton("保留檔案",null)
   .setPositiveButton("確認刪除",(d,w)->beginDelete(snapshot)).show();
 }
@@ -1037,9 +1038,16 @@ private void beginDelete(ArrayList<Scanner.Item> snapshot){
  op().setPendingDeletes(new ArrayList<>(snapshot));
  op().setDeleting(true);op().setFileBusy(true);
  op().setOperationDeleted(0);op().setOperationDeleteFailed(0);
- status.setText("等待 Android 系統刪除授權（"+snapshot.size()+" 個）…");
+ status.setText("準備刪除 "+snapshot.size()+" 個檔案…");
  updateSelection();
- requestDeleteBatch();
+ boolean offered=getPreferences(0).getBoolean("manage_media_offer_shown",false);
+ if(MediaManageFlow.offerDuringDelete(Build.VERSION.SDK_INT,canManageMedia(),offered)){
+  // Persist the one-time prompt decision, NOT the permission grant.
+  getPreferences(0).edit().putBoolean("manage_media_offer_shown",true).apply();
+  explainAndOpenManageMediaSettings(true);
+ }else{
+  requestDeleteBatch();
+ }
 }
 // A query that fails or returns null is NOT evidence of successful deletion.
 private boolean wasDeletedBySystem(Uri uri){
@@ -1224,7 +1232,9 @@ private void finishDeleteOperation(String reason){
    if(pending.get(i).uri==null)throw new IllegalArgumentException("檔案 URI 無效");
    uris.add(pending.get(i).uri);
   }
-  status.setText("請在 Android 系統視窗確認刪除這批 "+uris.size()+" 個檔案。");
+  status.setText(canManageMedia()
+   ?"已啟用媒體管理權限，正在刪除這批 "+uris.size()+" 個檔案…"
+   :"請在 Android 系統視窗確認刪除這批 "+uris.size()+" 個檔案。");
   startIntentSenderForResult(
    MediaStore.createDeleteRequest(getContentResolver(),uris).getIntentSender(),
    52,null,0,0,0);
