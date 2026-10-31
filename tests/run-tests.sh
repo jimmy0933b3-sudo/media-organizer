@@ -59,7 +59,7 @@ java -cp .test-classes tw.mediaorganizer.PlayerGesturePolicyTest
 # UI regression guard: keep timeline and center-tap playback but no bottom
 # previous/play/next buttons in either orientation.
 PREVIEW=app/src/main/java/tw/mediaorganizer/MediaPreviewDialog.java
-if grep -Eq 'videoButton\\(|goVideo\\(' "$PREVIEW"; then
+if grep -Fq -e 'videoButton(' -e 'goVideo(' "$PREVIEW"; then
   echo "FAIL: Redundant video navigation/playback button was reintroduced"
   exit 1
 fi
