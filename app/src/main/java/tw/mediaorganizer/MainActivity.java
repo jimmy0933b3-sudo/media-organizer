@@ -941,7 +941,7 @@ private boolean wasDeletedBySystem(Uri uri){
  if(uri==null)return false;
  try(android.database.Cursor c=getContentResolver().query(uri,
   new String[]{MediaStore.MediaColumns._ID},null,null,null)){
-  return c!=null&&!c.moveToFirst();
+  return DeleteVerification.verified(true,c!=null,c!=null&&c.moveToFirst());
  }catch(Exception e){
   android.util.Log.w("MediaOrganizer","Cannot verify deletion: "+uri,e);
   return false;
@@ -967,7 +967,7 @@ private void verifyApprovedDeletionBatch(){
    if(gone)verified.add(item);else unverified.add(item);
   }
   ui(()->{
-   if(op().getPendingDeletes()==null)return;
+   if(!op().isDeleting()||op().getPendingDeletes()==null)return;
    for(Scanner.Item item:verified){item.removed=true;selected.remove(item);}
    op().setOperationDeleted(op().getOperationDeleted()+verified.size());
    op().setOperationDeleteFailed(op().getOperationDeleteFailed()+unverified.size());
@@ -1158,6 +1158,7 @@ private void failPendingDeletion(String reason){
    op().setOperationHasSuccess(false);op().setOperationMoved(0);op().setOperationFailed(0);
   }}
   else if(request==52){
+  if(!op().isDeleting()||op().getPendingDeletes()==null)return;
   if(response==RESULT_OK)verifyApprovedDeletionBatch();
   else failPendingDeletion("未取得 Android 系統刪除授權，剩餘檔案仍保留。");
  }
