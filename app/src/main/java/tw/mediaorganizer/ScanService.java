@@ -67,7 +67,7 @@ public class ScanService extends Service {
     }
 
     public static void applyVerifiedDeletes(Scanner.Result result) {
-        if (result == null) return;
+        if (result == null || deletedMedia.size() == 0) return;
         synchronized (result) {
             for (Scanner.Item item : result.all) {
                 if (item.uri != null && isDeleted(item.uri)) item.removed = true;
