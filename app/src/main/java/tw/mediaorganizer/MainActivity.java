@@ -1102,29 +1102,30 @@ private void finishDeleteOperation(String reason){
     }
 
  private void requestDeleteBatch(){
-  if(op().getPendingDeletes()==null||op().getPendingDeletes().isEmpty()){
-   op().setFileBusy(false);
-   clearOpState();
-   saveScanCache(result);
-   updateSelection();
-   status.setText("刪除完成 · 成功 "+op().getOperationDeleted()+" · 失敗 "+op().getOperationDeleteFailed());
-   render();
-   return;
+ List<Scanner.Item> pending=op().getPendingDeletes();
+ if(pending==null||pending.isEmpty()){finishDeleteOperation(null);return;}
+ saveOpState();
+ try{
+  ArrayList<Uri> uris=new ArrayList<>();
+  for(int i=0;i<Math.min(100,pending.size());i++){
+   if(pending.get(i).uri==null)throw new IllegalArgumentException("檔案 URI 無效");
+   uris.add(pending.get(i).uri);
   }
-  saveOpState();
-  try{
-   ArrayList<Uri> uris=new ArrayList<>();
-   for(int i=0;i<Math.min(100,op().getPendingDeletes().size());i++)uris.add(op().getPendingDeletes().get(i).uri);
-   startIntentSenderForResult(MediaStore.createDeleteRequest(getContentResolver(),uris).getIntentSender(),52,null,0,0,0);
-  }catch(Exception e){
-   status.setText("刪除已完成（直接刪除 "+op().getOperationDeleted()+" 個，需要授權或失敗 "+op().getPendingDeletes().size()+" 個）");
-   op().setPendingDeletes(null);
-   op().setFileBusy(false);
-   saveScanCache(result);
-   updateSelection();
-   render();
-  }
+  status.setText("請在 Android 系統視窗確認刪除這批 "+uris.size()+" 個檔案。");
+  startIntentSenderForResult(
+   MediaStore.createDeleteRequest(getContentResolver(),uris).getIntentSender(),
+   52,null,0,0,0);
+ }catch(Exception e){
+  android.util.Log.e("MediaOrganizer","Unable to launch delete consent",e);
+  failPendingDeletion("無法開啟 Android 系統刪除授權："
+    +e.getClass().getSimpleName()+"。剩餘檔案未刪除。");
  }
+}
+private void failPendingDeletion(String reason){
+ int left=op().getPendingDeletes()==null?0:op().getPendingDeletes().size();
+ op().setOperationDeleteFailed(op().getOperationDeleteFailed()+left);
+ finishDeleteOperation(reason);
+}
  private void finishMoveOperation(){
   op().setPending(null);op().setFileBusy(false);
   if(!op().undoing()){
@@ -1155,31 +1156,10 @@ private void finishDeleteOperation(String reason){
    finishMoveOperation();
    op().setOperationHasSuccess(false);op().setOperationMoved(0);op().setOperationFailed(0);
   }}
-  else if(request==52){if(response==RESULT_OK)applyDeleteBatch();else{
-   status.setText("未獲刪除授權 · 已完成：成功 "+op().getOperationDeleted()+" · 失敗 "+op().getOperationDeleteFailed()+"。未授權之檔案已保留。");
-   if(op().getOperationDeleted()>0)saveScanCache(result);
-   op().setPendingDeletes(null);
-   clearOpState();
-   op().setFileBusy(false);updateSelection();render();
-  }}
+  else if(request==52){
+  if(response==RESULT_OK)verifyApprovedDeletionBatch();
+  else failPendingDeletion("未取得 Android 系統刪除授權，剩餘檔案仍保留。");
  }
-
- private void applyDeleteBatch(){
-  if(op().getPendingDeletes()==null)return;
-  final List<Scanner.Item> batch=new ArrayList<>(op().getPendingDeletes().subList(0,Math.min(100,op().getPendingDeletes().size())));
-  for(Scanner.Item item:batch){item.removed=true;selected.remove(item);}
-  op().getPendingDeletes().removeAll(batch);
-  op().setOperationDeleted(op().getOperationDeleted() + batch.size());
-  if(op().getPendingDeletes()!=null&&!op().getPendingDeletes().isEmpty()){
-   requestDeleteBatch();
-  }else{
-   op().setPendingDeletes(null);
-   op().setFileBusy(false);
-   clearOpState();
-   saveScanCache(result);
-   status.setText("刪除完成 · 成功 "+op().getOperationDeleted()+" · 失敗 "+op().getOperationDeleteFailed());
-   render();
-  }
  }
 
  private void applyBatch(){
