@@ -53,6 +53,10 @@ javac -d .test-classes app/src/main/java/tw/mediaorganizer/PreviewNavigation.jav
 java -cp .test-classes tw.mediaorganizer.PreviewNavigationTest
 javac -d .test-classes app/src/main/java/tw/mediaorganizer/VideoSwipeSeek.java tests/VideoSwipeSeekTest.java
 java -cp .test-classes tw.mediaorganizer.VideoSwipeSeekTest
+javac -d .test-classes app/src/main/java/tw/mediaorganizer/PlayerGesturePolicy.java tests/PlayerGesturePolicyTest.java
+java -cp .test-classes tw.mediaorganizer.PlayerGesturePolicyTest
+javac -d .test-classes app/src/main/java/tw/mediaorganizer/PlayerProgressStyle.java tests/PlayerProgressStyleTest.java
+java -cp .test-classes tw.mediaorganizer.PlayerProgressStyleTest
 javac -d .test-classes app/src/main/java/tw/mediaorganizer/DeleteVerification.java tests/DeleteVerificationTest.java
 java -cp .test-classes tw.mediaorganizer.DeleteVerificationTest
 javac -d .test-classes app/src/main/java/tw/mediaorganizer/MediaManageFlow.java tests/MediaManageFlowTest.java
