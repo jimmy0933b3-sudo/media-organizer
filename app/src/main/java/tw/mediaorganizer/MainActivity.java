@@ -838,6 +838,7 @@ public int getItemCount() { return data.size(); }
   if(footerContainer!=null) footerContainer.setVisibility(selected.isEmpty() ? View.GONE : View.VISIBLE);
  }
  private void preview(Scanner.Item tapped) {
+  LinkedHashMap<String, Scanner.Item> ordered = new LinkedHashMap<>();
   // Include the whole active category, not just the first 12 rows or 20 groups.
   // Preserve the current category order and dedupe across groups.
   if (result != null) {
