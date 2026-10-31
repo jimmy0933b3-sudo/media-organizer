@@ -3,4 +3,5 @@
     <item name="btn_settings" type="id" />
     <item name="btn_back" type="id" />
     <item name="result_list" type="id" />
+    <item name="empty_state" type="id" />
 </resources>
