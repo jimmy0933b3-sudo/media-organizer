@@ -248,7 +248,19 @@ public class MainActivity extends AppCompatActivity implements ScanService.ScanL
    }
    LinearLayout.LayoutParams tabsLp=new LinearLayout.LayoutParams(-1,-2);
    tabsLp.setMargins(0,0,0,dp(8));mainContent.addView(tabs,tabsLp);
-  list = new RecyclerView(this); list.setLayoutManager(new LinearLayoutManager(this)); adapter = new ItemAdapter(); list.setAdapter(adapter); mainContent.addView(list, new LinearLayout.LayoutParams(-1,0,1));
+  // A dedicated 36dp fast-scroll rail; keep row controls outside its touch zone.
+  FrameLayout listHost=new FrameLayout(this);
+  list=new RecyclerView(this);
+  list.setLayoutManager(new LinearLayoutManager(this));
+  list.setClipToPadding(false);
+  list.setPadding(0,0,dp(36),0);
+  adapter=new ItemAdapter();
+  list.setAdapter(adapter);
+  listHost.addView(list,new FrameLayout.LayoutParams(-1,-1));
+  ListFastScrollBar fastScrollBar=new ListFastScrollBar(this,list);
+  FrameLayout.LayoutParams railLp=new FrameLayout.LayoutParams(dp(36),-1,Gravity.END);
+  listHost.addView(fastScrollBar,railLp);
+  mainContent.addView(listHost,new LinearLayout.LayoutParams(-1,0,1));
   selection=text("已選 0 個",14);
 
   LinearLayout footerContainer=new LinearLayout(this);
