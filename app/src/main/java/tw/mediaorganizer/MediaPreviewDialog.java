@@ -62,7 +62,7 @@ final class MediaPreviewDialog {
     private boolean closed,videoActive,videoPrepared,draggingTimeline,draggingSeek,controlsShown=true;
     private boolean multiFingerGesture,landscape;
     private float zoomScale=1f,zoomX,zoomY,centroidX,centroidY;
-    private float touchX,touchY;
+    private float touchX,touchY,lastMotionX,lastMotionY;
     private int swipeOriginMs;
     private int index,generation,originalOrientation;
     private long previousTapTime;
@@ -274,6 +274,26 @@ final class MediaPreviewDialog {
         timeline.setThumbTintList(android.content.res.ColorStateList.valueOf(ACCENT));
         timeline.setProgressBackgroundTintList(android.content.res.ColorStateList.valueOf(0x66ffffff));
         timeline.setSplitTrack(false);
+        int trackThickness=dp(PlayerProgressStyle.trackDp(size));
+        GradientDrawable unplayedTrack=new GradientDrawable();
+        unplayedTrack.setColor(0x77ffffff);
+        unplayedTrack.setCornerRadius(dp(3));
+        GradientDrawable playedTrack=new GradientDrawable();
+        playedTrack.setColor(ACCENT);
+        playedTrack.setCornerRadius(dp(3));
+        android.graphics.drawable.ClipDrawable clippedTrack=
+            new android.graphics.drawable.ClipDrawable(
+                playedTrack,Gravity.START,android.graphics.drawable.ClipDrawable.HORIZONTAL);
+        android.graphics.drawable.LayerDrawable progressDrawable=
+            new android.graphics.drawable.LayerDrawable(new android.graphics.drawable.Drawable[]{
+                unplayedTrack,clippedTrack});
+        progressDrawable.setId(0,android.R.id.background);
+        progressDrawable.setId(1,android.R.id.progress);
+        progressDrawable.setLayerHeight(0,trackThickness);
+        progressDrawable.setLayerHeight(1,trackThickness);
+        progressDrawable.setLayerGravity(0,Gravity.CENTER_VERTICAL);
+        progressDrawable.setLayerGravity(1,Gravity.CENTER_VERTICAL);
+        timeline.setProgressDrawable(progressDrawable);
         timeline.setContentDescription("影片播放進度，可拖曳到任意位置");
         timeline.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener(){
             @Override public void onStartTrackingTouch(SeekBar bar){
@@ -311,7 +331,8 @@ final class MediaPreviewDialog {
                 new LinearLayout.LayoutParams(dp(42),dp(42)));
             timeElapsed=timeLabel();row.addView(timeElapsed);
             LinearLayout barHolder=new LinearLayout(activity);barHolder.setGravity(Gravity.CENTER);
-            barHolder.addView(timeline,new LinearLayout.LayoutParams(-1,barHeight));
+            barHolder.setWeightSum(1f);
+            barHolder.addView(timeline,new LinearLayout.LayoutParams(0,barHeight,width));
             LinearLayout.LayoutParams weight=new LinearLayout.LayoutParams(0,barHeight,1);
             weight.setMargins(dp(2),0,dp(2),0);row.addView(barHolder,weight);
             timeTotal=timeLabel();row.addView(timeTotal);
@@ -402,7 +423,7 @@ final class MediaPreviewDialog {
             case MotionEvent.ACTION_DOWN:
                 multiFingerGesture=false;
                 draggingSeek=false;
-                touchX=e.getX();touchY=e.getY();
+                touchX=e.getX();touchY=e.getY();lastMotionX=touchX;lastMotionY=touchY;
                 swipeOriginMs=videoActive&&videoPrepared?Math.max(0,video.getCurrentPosition()):0;
                 if(currentIsVideo())revealControls();
                 return true;
@@ -423,9 +444,10 @@ final class MediaPreviewDialog {
                         zoomX+=x-centroidX;zoomY+=y-centroidY;applyZoom();
                     }
                     centroidX=x;centroidY=y;
+                    lastMotionX=x;lastMotionY=y;
                     return true;
                 }
-                if(multiFingerGesture)return true;
+                if(multiFingerGesture){lastMotionX=e.getX();lastMotionY=e.getY();return true;}
                 float dx=e.getX()-touchX,dy=e.getY()-touchY;
                 if(currentIsVideo()&&videoPrepared&&
                         (draggingSeek||PlayerGesturePolicy.horizontalSeek(true,false,dx,dy,dp(18)))){
@@ -440,11 +462,13 @@ final class MediaPreviewDialog {
                         seekHint.setVisibility(View.VISIBLE);
                     }
                 }else if(zoomScale>1f){
-                    // One finger pans photos; on zoomed videos horizontal swipe remains seeking.
-                    zoomX+=currentIsVideo()?0:e.getHistorySize()>0?e.getX()-e.getHistoricalX(0):0;
-                    zoomY+=e.getHistorySize()>0?e.getY()-e.getHistoricalY(0):0;
+                    // Use last pointer coordinates, not optional MotionEvent history.
+                    // ACTION_MOVE events often have no historical samples at all.
+                    if(!currentIsVideo())zoomX+=e.getX()-lastMotionX;
+                    zoomY+=e.getY()-lastMotionY;
                     applyZoom();
                 }
+                lastMotionX=e.getX();lastMotionY=e.getY();
                 return true;
             case MotionEvent.ACTION_POINTER_UP:
                 multiFingerGesture=true;return true;
