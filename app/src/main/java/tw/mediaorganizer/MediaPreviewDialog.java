@@ -2,14 +2,16 @@ package tw.mediaorganizer;
 
 import android.app.Activity;
 import android.app.Dialog;
-import android.content.ActivityNotFoundException;
-import android.content.Intent;
+import android.content.SharedPreferences;
+import android.content.pm.ActivityInfo;
 import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.ImageDecoder;
+import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.util.Size;
 import android.view.Gravity;
 import android.view.MotionEvent;
@@ -23,477 +25,631 @@ import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
+import android.widget.SeekBar;
 import android.widget.TextView;
-import android.widget.Toast;
 import android.widget.VideoView;
+import androidx.appcompat.app.AlertDialog;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
 
 /**
- * Full-screen, offline MediaStore preview. Swipe UP for next, DOWN for previous.
- * Full-resolution originals are sampled to fit the device instead of loaded into
- * memory at camera resolution. Videos play inside this dialog with direct horizontal seek.
+ * Fullscreen photo/video viewer with my-player-style controls and touch gestures.
+ * Video starts on entry, hides overlays after two seconds of playback, offers
+ * a scrubbable timeline and skips photos with previous/next video buttons.
+ * No media is modified by the viewer.
  */
 final class MediaPreviewDialog {
+    private static final int ACCENT=0xff92A9FF;
     private final Activity activity;
-    private final ArrayList<Scanner.Item> items;
-    private final ExecutorService decoder = Executors.newSingleThreadExecutor();
     private final Dialog dialog;
+    private final ArrayList<Scanner.Item> items;
+    private final ExecutorService decoder=Executors.newSingleThreadExecutor();
+    private final Handler handler=new Handler(Looper.getMainLooper());
+    private final SharedPreferences preferences;
+    private FrameLayout root,stage;
+    private LinearLayout topBar,bottomBar;
     private ImageView image;
-    private VideoView videoView;
-    private TextView playbackTime;
-    private boolean videoActive;
-    private boolean videoPrepared;
-    private final Handler clockHandler = new Handler(Looper.getMainLooper());
-    private final Runnable clockTicker = new Runnable() {
-        @Override public void run() {
-            if (!closed && videoActive && videoPrepared) {
-                updatePlaybackTime();
-                clockHandler.postDelayed(this, 750L);
-            }
+    private VideoView video;
+    private ProgressBar loading;
+    private TextView title,counter,error,seekHint,timeElapsed,timeTotal;
+    private Button zoomReset;
+    private SeekBar timeline;
+    private Bitmap displayedBitmap;
+    private boolean closed,videoActive,videoPrepared,draggingTimeline,draggingSeek,controlsShown=true;
+    private boolean multiFingerGesture,landscape;
+    private float zoomScale=1f,zoomX,zoomY,centroidX,centroidY;
+    private float touchX,touchY;
+    private int swipeOriginMs;
+    private int index,generation,originalOrientation;
+    private long previousTapTime;
+    private float previousTapX,previousTapY;
+    private Runnable pendingZoomTap;
+    private ScaleGestureDetector zoomDetector;
+
+    private final Runnable hideControls=()->{
+        if(!closed&&dialog.isShowing()&&PlayerGesturePolicy.autoHide(
+                currentIsVideo(),videoPrepared,video!=null&&video.isPlaying())) {
+            controlsShown=false;
+            updateControlVisibility();
         }
     };
-    private ProgressBar progress;
-    private TextView counter;
-    private TextView name;
-    private TextView error;
-    private Button playVideo;
-    private Bitmap displayedBitmap;
-    private volatile int generation;
-    private int index;
-    private boolean closed;
-    private float startX;
-    private float startY;
-    private float zoomScale = 1f;
-    private float zoomOffsetX;
-    private float zoomOffsetY;
-    private float previousCentroidX;
-    private float previousCentroidY;
-    private boolean multiFingerGesture;
-    private ScaleGestureDetector zoomDetector;
-    private FrameLayout previewStage;
+    private final Runnable clockTicker=new Runnable(){
+        @Override public void run(){
+            if(closed||!videoActive||!videoPrepared)return;
+            if(!draggingTimeline&&!draggingSeek)updateTimeline();
+            if(!video.isPlaying()&& !controlsShown)revealControls();
+            handler.postDelayed(this,250L);
+        }
+    };
 
-    MediaPreviewDialog(Activity activity, List<Scanner.Item> items, int firstIndex) {
-        this.activity = activity;
-        this.items = new ArrayList<>(items);
-        this.index = Math.max(0, Math.min(this.items.size() - 1, firstIndex));
-        this.dialog = new Dialog(activity, android.R.style.Theme_Black_NoTitleBar_Fullscreen);
+    MediaPreviewDialog(Activity activity,List<Scanner.Item> collection,int firstIndex){
+        this.activity=activity;
+        items=new ArrayList<>(collection);
+        index=Math.max(0,Math.min(Math.max(0,items.size()-1),firstIndex));
+        originalOrientation=activity.getRequestedOrientation();
+        preferences=activity.getSharedPreferences("media_organizer_playback",Activity.MODE_PRIVATE);
+        dialog=new Dialog(activity,android.R.style.Theme_Black_NoTitleBar_Fullscreen);
         build();
     }
 
-    void show() {
-        if (items.isEmpty()) return;
+    void show(){
+        if(items.isEmpty())return;
         dialog.show();
-        Window window = dialog.getWindow();
-        if (window != null) {
-            window.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
+        Window window=dialog.getWindow();
+        if(window!=null){
+            window.setLayout(ViewGroup.LayoutParams.MATCH_PARENT,ViewGroup.LayoutParams.MATCH_PARENT);
             window.setStatusBarColor(Color.BLACK);
             window.setNavigationBarColor(Color.BLACK);
             window.addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
         }
+        // Follow my-player: allow sensor-based portrait/landscape only while viewing.
+        try{activity.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR);}
+        catch(RuntimeException ignored){}
         showCurrent();
     }
 
-    private int dp(int value) {
-        return Math.round(value * activity.getResources().getDisplayMetrics().density);
+    private int dp(float value){return Math.round(value*activity.getResources().getDisplayMetrics().density);}
+    private TextView text(String value,int size){
+        TextView v=new TextView(activity);
+        v.setText(value);v.setTextSize(size);v.setTextColor(Color.WHITE);
+        v.setGravity(Gravity.CENTER_VERTICAL);
+        return v;
     }
-
-    private TextView label(String value, int size) {
-        TextView view = new TextView(activity);
-        view.setText(value);
-        view.setTextSize(size);
-        view.setTextColor(Color.WHITE);
-        return view;
+    private Button button(String label,Runnable action){
+        Button b=new Button(activity);
+        b.setText(label);b.setAllCaps(false);b.setTextSize(14);
+        b.setTextColor(Color.WHITE);
+        b.setBackgroundColor(Color.TRANSPARENT);
+        b.setPadding(dp(4),0,dp(4),0);
+        b.setOnClickListener(v->action.run());
+        return b;
     }
-
-    private Button action(String value, Runnable runnable) {
-        Button button = new Button(activity);
-        button.setText(value);
-        button.setAllCaps(false);
-        button.setTextSize(14);
-        button.setTextColor(Color.WHITE);
-        button.setOnClickListener(v -> runnable.run());
-        return button;
+    private GradientDrawable overlay(boolean top){
+        return new GradientDrawable(top?
+            GradientDrawable.Orientation.TOP_BOTTOM:
+            GradientDrawable.Orientation.BOTTOM_TOP,
+            new int[]{0xeb000000,0x00000000});
     }
-
-    private void build() {
-        LinearLayout root = new LinearLayout(activity);
-        root.setOrientation(LinearLayout.VERTICAL);
+    private void build(){
+        root=new FrameLayout(activity);
         root.setBackgroundColor(Color.BLACK);
-        root.setPadding(dp(12), dp(16), dp(12), dp(18));
-
-        LinearLayout header = new LinearLayout(activity);
-        header.setGravity(Gravity.CENTER_VERTICAL);
-        Button close = action("關閉 ✕", dialog::dismiss);
-        header.addView(close, new LinearLayout.LayoutParams(dp(108), dp(50)));
-        counter = label("", 15);
-        counter.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
-        header.addView(counter, new LinearLayout.LayoutParams(0, dp(50), 1));
-        root.addView(header);
-
-        FrameLayout stage = new FrameLayout(activity);
-        previewStage = stage;
+        stage=new FrameLayout(activity);
         stage.setBackgroundColor(Color.BLACK);
         stage.setClipChildren(true);
         stage.setClipToPadding(true);
-        image = new ImageView(activity);
+        image=new ImageView(activity);
         image.setScaleType(ImageView.ScaleType.FIT_CENTER);
-        image.setContentDescription("媒體全螢幕預覽，上滑下一張，下滑上一張");
-        image.setAdjustViewBounds(false);
-        stage.addView(image, new FrameLayout.LayoutParams(-1, -1));
-        videoView = new VideoView(activity);
-        videoView.setVisibility(View.GONE);
-        stage.addView(videoView, new FrameLayout.LayoutParams(-1, -1));
-
-        progress = new ProgressBar(activity);
-        FrameLayout.LayoutParams loadingParams =
-                new FrameLayout.LayoutParams(dp(48), dp(48), Gravity.CENTER);
-        stage.addView(progress, loadingParams);
-
-        error = label("", 14);
-        error.setGravity(Gravity.CENTER);
-        error.setPadding(dp(24), dp(12), dp(24), dp(12));
+        image.setContentDescription("照片與影片預覽，單指上下切換，雙指縮放");
+        stage.addView(image,new FrameLayout.LayoutParams(-1,-1));
+        video=new VideoView(activity);
+        video.setVisibility(View.GONE);
+        stage.addView(video,new FrameLayout.LayoutParams(-1,-1));
+        loading=new ProgressBar(activity);
+        stage.addView(loading,new FrameLayout.LayoutParams(dp(48),dp(48),Gravity.CENTER));
+        error=text("",14);error.setGravity(Gravity.CENTER);
+        error.setPadding(dp(20),dp(16),dp(20),dp(16));
         error.setVisibility(View.GONE);
-        stage.addView(error, new FrameLayout.LayoutParams(-1, -2, Gravity.CENTER));
+        stage.addView(error,new FrameLayout.LayoutParams(-1,-2,Gravity.CENTER));
+        root.addView(stage,new FrameLayout.LayoutParams(-1,-1));
 
-        // One-finger gestures still browse/seek. Two fingers always zoom or
-        // pan, and never trigger a media switch or video seek on finger lift.
-        zoomDetector = new ScaleGestureDetector(activity,
-                new ScaleGestureDetector.SimpleOnScaleGestureListener() {
-                    @Override public boolean onScale(ScaleGestureDetector detector) {
-                        float factor = detector.getScaleFactor();
-                        if (Float.isNaN(factor) || Float.isInfinite(factor)) return true;
-                        float before = zoomScale;
-                        float after = PreviewZoom.clampScale(before * factor);
-                        if (Math.abs(after - before) < 0.0001f) return true;
-                        // Keep the point between the fingers under the fingers.
-                        float focusX = detector.getFocusX() - previewStage.getWidth() / 2f;
-                        float focusY = detector.getFocusY() - previewStage.getHeight() / 2f;
-                        zoomOffsetX = (zoomOffsetX - focusX) * (after / before) + focusX;
-                        zoomOffsetY = (zoomOffsetY - focusY) * (after / before) + focusY;
-                        zoomScale = after;
-                        applyZoom();
-                        return true;
-                    }
-                });
-
-        View gestures = new View(activity);
-        gestures.setContentDescription(
-                "雙指縮放照片或影片；上滑下一個、下滑上一個；影片向右快轉、向左倒退");
-        gestures.setBackgroundColor(Color.TRANSPARENT);
-        gestures.setOnTouchListener((view, event) -> {
-            zoomDetector.onTouchEvent(event);
-            switch (event.getActionMasked()) {
-                case MotionEvent.ACTION_DOWN:
-                    multiFingerGesture = false;
-                    startX = event.getX();
-                    startY = event.getY();
-                    return true;
-                case MotionEvent.ACTION_POINTER_DOWN:
-                    multiFingerGesture = true;
-                    if (event.getPointerCount() >= 2) {
-                        previousCentroidX = (event.getX(0) + event.getX(1)) / 2f;
-                        previousCentroidY = (event.getY(0) + event.getY(1)) / 2f;
-                    }
-                    return true;
-                case MotionEvent.ACTION_MOVE:
-                    if (event.getPointerCount() >= 2) {
-                        multiFingerGesture = true;
-                        float centroidX = (event.getX(0) + event.getX(1)) / 2f;
-                        float centroidY = (event.getY(0) + event.getY(1)) / 2f;
-                        if (zoomScale > 1f) {
-                            zoomOffsetX += centroidX - previousCentroidX;
-                            zoomOffsetY += centroidY - previousCentroidY;
-                            applyZoom();
-                        }
-                        previousCentroidX = centroidX;
-                        previousCentroidY = centroidY;
-                    }
-                    return true;
-                case MotionEvent.ACTION_POINTER_UP:
-                    multiFingerGesture = true;
-                    return true;
-                case MotionEvent.ACTION_UP:
-                    // This includes the trailing one-finger UP after a pinch.
-                    if (multiFingerGesture) {
-                        multiFingerGesture = false;
-                        return true;
-                    }
-                    float dy = event.getY() - startY;
-                    float dx = event.getX() - startX;
-                    if (Math.abs(dx) > Math.abs(dy) * 1.2f
-                            && Math.abs(dx) > dp(56) && videoActive && videoPrepared) {
-                        seekBySwipe(dx);
-                    } else if (Math.abs(dy) > dp(65)
-                            && Math.abs(dy) > Math.abs(dx) * 1.2f) {
-                        navigate(dy < 0 ? 1 : -1);
-                    }
-                    return true;
-                case MotionEvent.ACTION_CANCEL:
-                    multiFingerGesture = false;
-                    return true;
-                default:
-                    return true;
+        zoomDetector=new ScaleGestureDetector(activity,
+                new ScaleGestureDetector.SimpleOnScaleGestureListener(){
+            @Override public boolean onScale(ScaleGestureDetector detector){
+                float factor=detector.getScaleFactor();
+                if(Float.isNaN(factor)||Float.isInfinite(factor))return true;
+                float next=Math.max(1f,Math.min(5f,zoomScale*factor));
+                if(Math.abs(next-zoomScale)<.001f)return true;
+                float centerX=detector.getFocusX()-stage.getWidth()/2f;
+                float centerY=detector.getFocusY()-stage.getHeight()/2f;
+                zoomX=(zoomX-centerX)*(next/zoomScale)+centerX;
+                zoomY=(zoomY-centerY)*(next/zoomScale)+centerY;
+                zoomScale=next;
+                applyZoom();
+                return true;
             }
         });
-        stage.addView(gestures, new FrameLayout.LayoutParams(-1, -1));
-        root.addView(stage, new LinearLayout.LayoutParams(-1, 0, 1));
+        View gestures=new View(activity);
+        gestures.setContentDescription("影片中央點按播放或暫停，左右滑動快轉或倒退，上下滑切換，雙指縮放");
+        gestures.setOnTouchListener((v,e)->onGesture(e));
+        stage.addView(gestures,new FrameLayout.LayoutParams(-1,-1));
 
-        name = label("", 13);
-        name.setGravity(Gravity.CENTER);
-        name.setMaxLines(2);
-        name.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE);
-        name.setPadding(dp(8), dp(9), dp(8), dp(9));
-        root.addView(name, new LinearLayout.LayoutParams(-1, -2));
+        seekHint=text("",15);seekHint.setGravity(Gravity.CENTER);
+        seekHint.setPadding(dp(16),dp(8),dp(16),dp(8));
+        GradientDrawable hintBg=new GradientDrawable();
+        hintBg.setColor(0xcc000000);hintBg.setCornerRadius(dp(16));seekHint.setBackground(hintBg);
+        seekHint.setVisibility(View.GONE);
+        stage.addView(seekHint,new FrameLayout.LayoutParams(-2,-2,Gravity.CENTER));
 
-        playVideo = action("▶ 播放這段影片", this::toggleVideo);
-        root.addView(playVideo, new LinearLayout.LayoutParams(-1, dp(48)));
-        playbackTime = label("", 13);
-        playbackTime.setTextColor(0xffC6D8E8);
-        playbackTime.setGravity(Gravity.CENTER);
-        playbackTime.setVisibility(View.GONE);
-        root.addView(playbackTime, new LinearLayout.LayoutParams(-1, dp(26)));
+        topBar=new LinearLayout(activity);topBar.setGravity(Gravity.CENTER_VERTICAL);
+        topBar.setPadding(dp(5),dp(4),dp(6),dp(6));topBar.setBackground(overlay(true));
+        Button back=button("‹",dialog::dismiss);back.setTextSize(32);
+        back.setContentDescription("返回清單");
+        topBar.addView(back,new LinearLayout.LayoutParams(dp(44),dp(48)));
+        LinearLayout titleBox=new LinearLayout(activity);
+        titleBox.setOrientation(LinearLayout.VERTICAL);
+        title=text("",15);title.setSingleLine();title.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        titleBox.addView(title);
+        counter=text("",12);counter.setTextColor(0xffCDD7E8);
+        titleBox.addView(counter);
+        topBar.addView(titleBox,new LinearLayout.LayoutParams(0,-2,1));
+        zoomReset=button("1×",this::resetZoom);
+        zoomReset.setContentDescription("重設縮放");
+        zoomReset.setVisibility(View.GONE);
+        topBar.addView(zoomReset,new LinearLayout.LayoutParams(dp(46),dp(44)));
+        Button settings=button("⚙",this::showPlaybackSettings);
+        settings.setContentDescription("影片進度條設定");
+        topBar.addView(settings,new LinearLayout.LayoutParams(dp(44),dp(44)));
+        root.addView(topBar,new FrameLayout.LayoutParams(-1,-2,Gravity.TOP));
 
-        TextView hint = label("雙指縮放 · 上滑下一個／下滑上一個 · 影片左右快轉或倒退", 12);
-        hint.setTextColor(0xffA9BBCD);
-        hint.setGravity(Gravity.CENTER);
-        root.addView(hint);
+        bottomBar=new LinearLayout(activity);
+        bottomBar.setGravity(Gravity.CENTER_HORIZONTAL);
+        bottomBar.setBackground(overlay(false));
+        FrameLayout.LayoutParams bottomParams=new FrameLayout.LayoutParams(-1,-2,Gravity.BOTTOM);
+        root.addView(bottomBar,bottomParams);
         dialog.setContentView(root);
-        dialog.setOnDismissListener(d -> {
-            closed = true;
-            generation++;
+        root.addOnLayoutChangeListener((v,l,t,r,b,ol,ot,or_,ob)->{
+            boolean wide=(r-l)>(b-t);
+            if(bottomBar!=null&&(wide!=landscape)){
+                landscape=wide;
+                buildBottomControls();
+            }
+        });
+        buildBottomControls();
+        dialog.setOnDismissListener(d->{
+            closed=true;generation++;
+            handler.removeCallbacksAndMessages(null);
             decoder.shutdownNow();
             stopVideo();
             resetZoom();
             releaseImage();
             items.clear();
+            try{activity.setRequestedOrientation(originalOrientation);}
+            catch(RuntimeException ignored){}
         });
     }
 
-    /** Zoom applies to the photo preview and the playback SurfaceView. */
-    private void applyZoom() {
-        zoomScale = PreviewZoom.clampScale(zoomScale);
-        int width = previewStage == null ? 0 : previewStage.getWidth();
-        int height = previewStage == null ? 0 : previewStage.getHeight();
-        zoomOffsetX = PreviewZoom.clampOffset(zoomOffsetX, width, zoomScale);
-        zoomOffsetY = PreviewZoom.clampOffset(zoomOffsetY, height, zoomScale);
-        image.setScaleX(zoomScale);
-        image.setScaleY(zoomScale);
-        image.setTranslationX(zoomOffsetX);
-        image.setTranslationY(zoomOffsetY);
-        videoView.setScaleX(zoomScale);
-        videoView.setScaleY(zoomScale);
-        videoView.setTranslationX(zoomOffsetX);
-        videoView.setTranslationY(zoomOffsetY);
+    private boolean currentIsVideo(){
+        return !items.isEmpty()&&index>=0&&index<items.size()&&items.get(index).video;
+    }
+    private int adjacentVideo(int direction){
+        boolean[] flags=new boolean[items.size()];
+        for(int i=0;i<flags.length;i++)flags[i]=items.get(i).video&&!items.get(i).removed;
+        return PlayerGesturePolicy.adjacentVideo(flags,index,direction);
+    }
+    private void goVideo(int direction){
+        int target=adjacentVideo(direction);
+        if(target>=0){index=target;showCurrent();}
+    }
+    private void navigate(int direction){
+        int target=PreviewNavigation.move(index,items.size(),direction);
+        if(target>=0&&target!=index){index=target;showCurrent();}
     }
 
-    private void resetZoom() {
-        zoomScale = 1f;
-        zoomOffsetX = 0f;
-        zoomOffsetY = 0f;
-        multiFingerGesture = false;
-        applyZoom();
+    private void buildBottomControls(){
+        if(bottomBar==null)return;
+        bottomBar.removeAllViews();
+        bottomBar.setOrientation(LinearLayout.VERTICAL);
+        bottomBar.setPadding(dp(landscape?10:18),dp(landscape?8:20),
+                dp(landscape?10:18),dp(landscape?5:18));
+        if(!currentIsVideo()){
+            if(!landscape){
+                TextView instruction=text("上下滑切換照片／影片  ·  雙指縮放",11);
+                instruction.setTextColor(0xffBAC5D6);instruction.setGravity(Gravity.CENTER);
+                bottomBar.addView(instruction);
+            }
+            updateControlVisibility();
+            return;
+        }
+
+        float size=PlayerProgressStyle.scale(preferences.getFloat("size",1f));
+        float width=PlayerProgressStyle.width(preferences.getFloat("width",.96f));
+
+        timeline=new SeekBar(activity);
+        timeline.setMax(1000);
+        timeline.setProgressTintList(android.content.res.ColorStateList.valueOf(ACCENT));
+        timeline.setThumbTintList(android.content.res.ColorStateList.valueOf(ACCENT));
+        timeline.setProgressBackgroundTintList(android.content.res.ColorStateList.valueOf(0x66ffffff));
+        timeline.setSplitTrack(false);
+        timeline.setContentDescription("影片播放進度，可拖曳到任意位置");
+        timeline.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener(){
+            @Override public void onStartTrackingTouch(SeekBar bar){
+                draggingTimeline=true;revealControls();
+            }
+            @Override public void onProgressChanged(SeekBar bar,int progress,boolean fromUser){
+                if(!fromUser||!videoPrepared)return;
+                int duration=video.getDuration();
+                if(duration>0){
+                    int target=Math.round(duration*(progress/1000f));
+                    video.seekTo(target);updatePlaybackTime(target,duration);
+                }
+                revealControls();
+            }
+            @Override public void onStopTrackingTouch(SeekBar bar){
+                draggingTimeline=false;revealControls();updateTimeline();
+            }
+        });
+        // Settings are in my-player's same ranges; scale the touch target and
+        // the visible thumb without stealing touch from the playback stage.
+        int thumb=dp(PlayerProgressStyle.thumbDp(size));
+        GradientDrawable thumbShape=new GradientDrawable();
+        thumbShape.setShape(GradientDrawable.OVAL);thumbShape.setColor(ACCENT);
+        thumbShape.setSize(thumb,thumb);
+        timeline.setThumb(thumbShape);
+        int barHeight=dp(Math.max(30f,size*30f));
+        if(landscape){
+            LinearLayout row=new LinearLayout(activity);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.addView(videoButton("|◀",()->goVideo(-1),adjacentVideo(-1)>=0,"上一部影片"),
+                new LinearLayout.LayoutParams(dp(42),dp(42)));
+            row.addView(videoButton(video.isPlaying()?"❚❚":"▶",this::toggleVideo,true,"播放或暫停"),
+                new LinearLayout.LayoutParams(dp(46),dp(44)));
+            row.addView(videoButton("▶|",()->goVideo(1),adjacentVideo(1)>=0,"下一部影片"),
+                new LinearLayout.LayoutParams(dp(42),dp(42)));
+            timeElapsed=timeLabel();row.addView(timeElapsed);
+            LinearLayout barHolder=new LinearLayout(activity);barHolder.setGravity(Gravity.CENTER);
+            barHolder.addView(timeline,new LinearLayout.LayoutParams(-1,barHeight));
+            LinearLayout.LayoutParams weight=new LinearLayout.LayoutParams(0,barHeight,1);
+            weight.setMargins(dp(2),0,dp(2),0);row.addView(barHolder,weight);
+            timeTotal=timeLabel();row.addView(timeTotal);
+            bottomBar.addView(row);
+        }else{
+            LinearLayout barHolder=new LinearLayout(activity);barHolder.setGravity(Gravity.CENTER);
+            barHolder.addView(timeline,new LinearLayout.LayoutParams(-1,barHeight));
+            LinearLayout.LayoutParams progressLp=new LinearLayout.LayoutParams(
+                    Math.round(Math.max(1,activity.getResources().getDisplayMetrics().widthPixels-dp(36))*width),
+                    barHeight);
+            bottomBar.addView(barHolder,progressLp);
+            LinearLayout timeRow=new LinearLayout(activity);timeRow.setGravity(Gravity.CENTER_VERTICAL);
+            timeElapsed=timeLabel();timeTotal=timeLabel();
+            timeRow.addView(timeElapsed);
+            View spacer=new View(activity);timeRow.addView(spacer,new LinearLayout.LayoutParams(0,dp(14),1));
+            timeRow.addView(timeTotal);
+            bottomBar.addView(timeRow,new LinearLayout.LayoutParams(-1,-2));
+            LinearLayout buttons=new LinearLayout(activity);
+            buttons.setGravity(Gravity.CENTER);
+            buttons.addView(videoButton("|◀",()->goVideo(-1),adjacentVideo(-1)>=0,"上一部影片"),
+                    new LinearLayout.LayoutParams(dp(56),dp(48)));
+            buttons.addView(videoButton(video.isPlaying()?"❚❚":"▶",this::toggleVideo,true,"播放或暫停"),
+                    new LinearLayout.LayoutParams(dp(88),dp(52)));
+            buttons.addView(videoButton("▶|",()->goVideo(1),adjacentVideo(1)>=0,"下一部影片"),
+                    new LinearLayout.LayoutParams(dp(56),dp(48)));
+            bottomBar.addView(buttons);
+        }
+        updateTimeline();
+        updateControlVisibility();
     }
 
-    private void navigate(int direction) {
-        int target = PreviewNavigation.move(index, items.size(), direction);
-        if (target != index && target >= 0) {
-            index = target;
-            showCurrent();
+    private Button videoButton(String label,Runnable action,boolean enabled,String description){
+        Button b=button(label,()->{revealControls();action.run();});
+        b.setEnabled(enabled);
+        b.setContentDescription(description);
+        b.setTextSize(label.equals("▶")||label.equals("❚❚")?25:19);
+        if(!enabled)b.setTextColor(0xff777777);
+        return b;
+    }
+    private TextView timeLabel(){
+        TextView text=text("00:00",11);
+        text.setPadding(dp(2),0,dp(2),0);
+        return text;
+    }
+    private void updateControlVisibility(){
+        int visible=controlsShown?View.VISIBLE:View.GONE;
+        if(topBar!=null)topBar.setVisibility(visible);
+        if(bottomBar!=null)bottomBar.setVisibility(visible);
+    }
+    private void revealControls(){
+        controlsShown=true;updateControlVisibility();
+        handler.removeCallbacks(hideControls);
+        if(PlayerGesturePolicy.autoHide(currentIsVideo(),videoPrepared,video!=null&&video.isPlaying()))
+            handler.postDelayed(hideControls,2000L);
+    }
+    private void showPlaybackSettings(){
+        revealControls();
+        LinearLayout layout=new LinearLayout(activity);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setPadding(dp(18),dp(12),dp(18),dp(8));
+        TextView sizeLabel=text("進度條粗細",15);sizeLabel.setTextColor(Color.BLACK);
+        layout.addView(sizeLabel);
+        SeekBar scaleBar=new SeekBar(activity);scaleBar.setMax(170);
+        scaleBar.setProgress(Math.round((PlayerProgressStyle.scale(preferences.getFloat("size",1f))-.8f)*100f));
+        layout.addView(scaleBar);
+        TextView widthLabel=text("進度條寬度",15);widthLabel.setTextColor(Color.BLACK);
+        layout.addView(widthLabel);
+        SeekBar widthBar=new SeekBar(activity);widthBar.setMax(40);
+        widthBar.setProgress(Math.round((PlayerProgressStyle.width(preferences.getFloat("width",.96f))-.6f)*100f));
+        layout.addView(widthBar);
+        new AlertDialog.Builder(activity)
+          .setTitle("播放設定")
+          .setView(layout)
+          .setPositiveButton("儲存",(d,w)->{
+              preferences.edit().putFloat("size",.8f+scaleBar.getProgress()/100f)
+                       .putFloat("width",.6f+widthBar.getProgress()/100f).apply();
+              buildBottomControls();revealControls();
+          })
+          .setNeutralButton("恢復預設",(d,w)->{
+              preferences.edit().putFloat("size",1f).putFloat("width",.96f).apply();
+              buildBottomControls();revealControls();
+          })
+          .setNegativeButton("取消",null).show();
+    }
+    private boolean onGesture(MotionEvent e){
+        zoomDetector.onTouchEvent(e);
+        switch(e.getActionMasked()){
+            case MotionEvent.ACTION_DOWN:
+                multiFingerGesture=false;
+                draggingSeek=false;
+                touchX=e.getX();touchY=e.getY();
+                swipeOriginMs=videoActive&&videoPrepared?Math.max(0,video.getCurrentPosition()):0;
+                if(currentIsVideo())revealControls();
+                return true;
+            case MotionEvent.ACTION_POINTER_DOWN:
+                multiFingerGesture=true;
+                cancelSingleZoomTap();
+                if(e.getPointerCount()>1){
+                    centroidX=(e.getX(0)+e.getX(1))/2f;
+                    centroidY=(e.getY(0)+e.getY(1))/2f;
+                }
+                return true;
+            case MotionEvent.ACTION_MOVE:
+                if(e.getPointerCount()>1){
+                    multiFingerGesture=true;
+                    float x=(e.getX(0)+e.getX(1))/2f;
+                    float y=(e.getY(0)+e.getY(1))/2f;
+                    if(zoomScale>1f){
+                        zoomX+=x-centroidX;zoomY+=y-centroidY;applyZoom();
+                    }
+                    centroidX=x;centroidY=y;
+                    return true;
+                }
+                if(multiFingerGesture)return true;
+                float dx=e.getX()-touchX,dy=e.getY()-touchY;
+                if(currentIsVideo()&&videoPrepared&&
+                        (draggingSeek||PlayerGesturePolicy.horizontalSeek(true,false,dx,dy,dp(18)))){
+                    draggingSeek=true;
+                    int duration=video.getDuration();
+                    if(duration>0){
+                        int target=PlayerGesturePolicy.seekTarget(swipeOriginMs,duration,dx);
+                        video.seekTo(target);
+                        updatePlaybackTime(target,duration);
+                        if(timeline!=null)timeline.setProgress(Math.round(target*1000f/duration));
+                        seekHint.setText(formatTime(target)+" / "+formatTime(duration));
+                        seekHint.setVisibility(View.VISIBLE);
+                    }
+                }else if(zoomScale>1f){
+                    // One finger pans photos; on zoomed videos horizontal swipe remains seeking.
+                    zoomX+=currentIsVideo()?0:e.getHistorySize()>0?e.getX()-e.getHistoricalX(0):0;
+                    zoomY+=e.getHistorySize()>0?e.getY()-e.getHistoricalY(0):0;
+                    applyZoom();
+                }
+                return true;
+            case MotionEvent.ACTION_POINTER_UP:
+                multiFingerGesture=true;return true;
+            case MotionEvent.ACTION_UP:
+                seekHint.setVisibility(View.GONE);
+                if(multiFingerGesture){multiFingerGesture=false;return true;}
+                float endDx=e.getX()-touchX,endDy=e.getY()-touchY;
+                if(draggingSeek){draggingSeek=false;revealControls();return true;}
+                if(zoomScale<=1.01f&&Math.abs(endDy)>dp(85)&&
+                        Math.abs(endDy)>Math.abs(endDx)*1.2f){
+                    cancelSingleZoomTap();navigate(endDy<0?1:-1);
+                }else if(Math.abs(endDx)<dp(10)&&Math.abs(endDy)<dp(10)){
+                    handleTap(e.getX(),e.getY());
+                }else{cancelSingleZoomTap();}
+                return true;
+            case MotionEvent.ACTION_CANCEL:
+                seekHint.setVisibility(View.GONE);
+                draggingSeek=false;multiFingerGesture=false;cancelSingleZoomTap();
+                return true;
+            default:return true;
         }
     }
-
-    private void showCurrent() {
-        if (closed || items.isEmpty()) return;
-        int requestId = ++generation;
+    private void handleTap(float x,float y){
+        long now=SystemClock.uptimeMillis();
+        if(zoomScale>1.01f&&previousTapTime>0&&now-previousTapTime<=330L&&
+                Math.hypot(x-previousTapX,y-previousTapY)<=dp(48)){
+            cancelSingleZoomTap();resetZoom();revealControls();return;
+        }
+        if(zoomScale>1.01f){
+            cancelSingleZoomTap();
+            previousTapTime=now;previousTapX=x;previousTapY=y;
+            pendingZoomTap=()->{
+                pendingZoomTap=null;previousTapTime=0;
+                singleTap(x,y);
+            };
+            handler.postDelayed(pendingZoomTap,310L);
+        }else{
+            previousTapTime=0;
+            singleTap(x,y);
+        }
+    }
+    private void singleTap(float x,float y){
+        if(currentIsVideo()){
+            if(PlayerGesturePolicy.centerPlayTap(x,y,stage.getWidth(),stage.getHeight()))
+                toggleVideo();
+            else revealControls();
+        }else{
+            controlsShown=!controlsShown;updateControlVisibility();
+        }
+    }
+    private void cancelSingleZoomTap(){
+        if(pendingZoomTap!=null){handler.removeCallbacks(pendingZoomTap);pendingZoomTap=null;}
+        previousTapTime=0;
+    }
+    private void applyZoom(){
+        zoomScale=Math.max(1f,Math.min(5f,zoomScale));
+        float maxX=(zoomScale-1f)*stage.getWidth()/2f;
+        float maxY=(zoomScale-1f)*stage.getHeight()/2f;
+        zoomX=Math.max(-maxX,Math.min(maxX,zoomX));
+        zoomY=Math.max(-maxY,Math.min(maxY,zoomY));
+        image.setScaleX(zoomScale);image.setScaleY(zoomScale);
+        image.setTranslationX(zoomX);image.setTranslationY(zoomY);
+        video.setScaleX(zoomScale);video.setScaleY(zoomScale);
+        video.setTranslationX(zoomX);video.setTranslationY(zoomY);
+        if(zoomReset!=null)zoomReset.setVisibility(zoomScale>1.01f?View.VISIBLE:View.GONE);
+    }
+    private void resetZoom(){
+        zoomScale=1f;zoomX=0f;zoomY=0f;applyZoom();
+    }
+    private void showCurrent(){
+        if(closed||items.isEmpty())return;
+        ++generation;
+        cancelSingleZoomTap();
         stopVideo();
         resetZoom();
-        Scanner.Item item = items.get(index);
-        counter.setText((index + 1) + " / " + items.size());
-        name.setText((item.video ? "影片 · " : "照片 · ") +
-                (item.name == null ? "未命名" : item.name));
-        playVideo.setVisibility(item.video ? View.VISIBLE : View.GONE);
-        playVideo.setText("▶ 播放這段影片");
-        playbackTime.setVisibility(View.GONE);
-        image.setVisibility(View.VISIBLE);
+        Scanner.Item item=items.get(index);
+        title.setText(item.name==null?"未命名":item.name);
+        counter.setText((index+1)+" / "+items.size()+"   ·   "+(item.video?"影片":"照片"));
+        controlsShown=true;
         error.setVisibility(View.GONE);
-        progress.setVisibility(View.VISIBLE);
+        loading.setVisibility(View.VISIBLE);
+        image.setVisibility(View.VISIBLE);
         releaseImage();
-
-        try {
-            decoder.execute(() -> {
-                if (requestId != generation || closed) return;
-                Bitmap bitmap = null;
-                try {
-                    if (item.video) {
-                        bitmap = activity.getContentResolver().loadThumbnail(
-                                item.uri, new Size(1024, 1024), null);
-                    } else {
-                        final int maxDimension = Math.min(2304,
-                                Math.max(activity.getResources().getDisplayMetrics().widthPixels,
-                                        activity.getResources().getDisplayMetrics().heightPixels) * 2);
-                        bitmap = ImageDecoder.decodeBitmap(
-                                ImageDecoder.createSource(activity.getContentResolver(), item.uri),
-                                (source, info, ignored) -> {
-                                    int width = info.getSize().getWidth();
-                                    int height = info.getSize().getHeight();
-                                    float scale = Math.min(1f, maxDimension /
-                                            (float) Math.max(1, Math.max(width, height)));
-                                    source.setTargetSize(Math.max(1, Math.round(width * scale)),
-                                            Math.max(1, Math.round(height * scale)));
-                                    source.setAllocator(ImageDecoder.ALLOCATOR_SOFTWARE);
-                                });
+        buildBottomControls();
+        if(item.video)startVideo();
+        else showPhoto(item,generation);
+        updateControlVisibility();
+    }
+    private void showPhoto(Scanner.Item item,int requestId){
+        try{
+            decoder.execute(()->{
+                if(requestId!=generation||closed)return;
+                Bitmap bitmap=null;
+                try{
+                    final int maxDimension=Math.min(2304,
+                        Math.max(activity.getResources().getDisplayMetrics().widthPixels,
+                                 activity.getResources().getDisplayMetrics().heightPixels)*2);
+                    bitmap=ImageDecoder.decodeBitmap(
+                        ImageDecoder.createSource(activity.getContentResolver(),item.uri),
+                        (source,info,ignored)->{
+                            int width=info.getSize().getWidth(),height=info.getSize().getHeight();
+                            float scale=Math.min(1f,maxDimension/(float)Math.max(1,Math.max(width,height)));
+                            source.setTargetSize(Math.max(1,Math.round(width*scale)),
+                                Math.max(1,Math.round(height*scale)));
+                            source.setAllocator(ImageDecoder.ALLOCATOR_SOFTWARE);
+                        });
+                }catch(Exception|OutOfMemoryError ignored){}
+                Bitmap decoded=bitmap;
+                activity.runOnUiThread(()->{
+                    if(closed||!dialog.isShowing()||requestId!=generation){
+                        if(decoded!=null)decoded.recycle();return;
                     }
-                } catch (Exception | OutOfMemoryError ignored) {
-                    // Missing originals and partial media permissions are expected edge cases.
-                }
-                final Bitmap decoded = bitmap;
-                activity.runOnUiThread(() -> {
-                    if (closed || requestId != generation || !dialog.isShowing()) {
-                        if (decoded != null) decoded.recycle();
-                        return;
-                    }
-                    progress.setVisibility(View.GONE);
-                    if (decoded != null) {
-                        displayedBitmap = decoded;
-                        image.setImageBitmap(decoded);
-                    } else {
-                        error.setText(item.video
-                                ? "影片封面無法讀取，仍可點下方「播放這段影片」。"
-                                : "無法讀取這張照片，可能已移動、刪除或沒有讀取權限。");
+                    loading.setVisibility(View.GONE);
+                    if(decoded!=null){
+                        displayedBitmap=decoded;image.setImageBitmap(decoded);
+                    }else{
+                        error.setText("照片無法讀取，可能已移動、刪除或沒有權限。");
                         error.setVisibility(View.VISIBLE);
                     }
                 });
             });
-        } catch (RejectedExecutionException ignored) {
-            progress.setVisibility(View.GONE);
-        }
+        }catch(RejectedExecutionException ignored){loading.setVisibility(View.GONE);}
     }
-
-    private void releaseImage() {
-        image.setImageDrawable(null);
-        Bitmap old = displayedBitmap;
-        displayedBitmap = null;
-        if (old != null && !old.isRecycled()) old.recycle();
-    }
-
-    private void toggleVideo() {
-        if (items.isEmpty() || !items.get(index).video || closed) return;
-        if (!videoActive) {
-            startVideo();
-        } else if (videoPrepared) {
-            if (videoView.isPlaying()) {
-                videoView.pause();
-                playVideo.setText("▶ 繼續播放");
-            } else {
-                if (videoView.getDuration() > 0
-                        && videoView.getCurrentPosition() >= videoView.getDuration() - 250) {
-                    videoView.seekTo(0);
-                }
-                videoView.start();
-                playVideo.setText("❚❚ 暫停");
-            }
-            updatePlaybackTime();
-        }
-    }
-
-    private void startVideo() {
-        Scanner.Item item = items.get(index);
-        if (!item.video || closed) return;
-        // Invalidate any thumbnail decode running on a background worker.
-        generation++;
-        videoActive = true;
-        videoPrepared = false;
-        videoView.setVisibility(View.VISIBLE);
+    private void startVideo(){
+        Scanner.Item media=items.get(index);
+        int playbackIndex=index,requestId=generation;
+        videoActive=true;videoPrepared=false;
+        video.setVisibility(View.VISIBLE);
         image.setVisibility(View.GONE);
-        error.setVisibility(View.GONE);
-        progress.setVisibility(View.VISIBLE);
-        playbackTime.setText("影片載入中…");
-        playbackTime.setVisibility(View.VISIBLE);
-        playVideo.setEnabled(false);
-        final int videoIndex = index;
-        final int requestId = generation;
-        videoView.setOnPreparedListener(mediaPlayer -> {
-            if (closed || !videoActive || videoIndex != index || generation != requestId) return;
-            videoPrepared = true;
-            progress.setVisibility(View.GONE);
-            playVideo.setEnabled(true);
-            playVideo.setText("❚❚ 暫停");
-            videoView.start();
-            clockHandler.removeCallbacks(clockTicker);
-            clockHandler.post(clockTicker);
-            updatePlaybackTime();
+        loading.setVisibility(View.VISIBLE);
+        video.setOnPreparedListener(mp->{
+            if(closed||!videoActive||playbackIndex!=index||requestId!=generation)return;
+            videoPrepared=true;
+            loading.setVisibility(View.GONE);
+            video.start();
+            buildBottomControls();
+            handler.removeCallbacks(clockTicker);
+            handler.post(clockTicker);
+            revealControls();
         });
-        videoView.setOnCompletionListener(mediaPlayer -> {
-            if (!closed && videoActive && videoIndex == index && generation == requestId) {
-                playVideo.setText("▶ 重新播放");
-                updatePlaybackTime();
+        video.setOnCompletionListener(mp->{
+            if(!closed&&videoActive&&playbackIndex==index&&requestId==generation){
+                handler.removeCallbacks(hideControls);
+                controlsShown=true;buildBottomControls();updateTimeline();
             }
         });
-        videoView.setOnErrorListener((mediaPlayer, what, extra) -> {
-            if (!closed && videoIndex == index && generation == requestId) {
-                stopVideo();
-                progress.setVisibility(View.GONE);
+        video.setOnErrorListener((mp,what,extra)->{
+            if(!closed&&playbackIndex==index&&requestId==generation){
+                stopVideo();loading.setVisibility(View.GONE);
                 image.setVisibility(View.VISIBLE);
-                error.setText("影片無法播放，可能是格式不支援或檔案讀取權限不足。");
+                error.setText("影片無法播放，可能格式不支援或沒有讀取權限。");
                 error.setVisibility(View.VISIBLE);
+                revealControls();
             }
             return true;
         });
-        try {
-            videoView.setVideoURI(item.uri);
-        } catch (RuntimeException e) {
-            stopVideo();
-            progress.setVisibility(View.GONE);
+        try{video.setVideoURI(media.uri);}
+        catch(RuntimeException e){
+            stopVideo();loading.setVisibility(View.GONE);
             image.setVisibility(View.VISIBLE);
-            error.setText("無法開啟影片：" + e.getClass().getSimpleName());
+            error.setText("無法開啟影片："+e.getClass().getSimpleName());
             error.setVisibility(View.VISIBLE);
         }
     }
-
-    private void seekBySwipe(float deltaX) {
-        if (!videoActive || !videoPrepared) return;
-        int duration = videoView.getDuration();
-        if (duration <= 0) return;
-        int target = VideoSwipeSeek.targetMs(videoView.getCurrentPosition(),
-                duration, deltaX, activity.getResources().getDisplayMetrics().density);
-        // No grey overlay or alpha animation; move the playhead immediately.
-        videoView.seekTo(target);
-        updatePlaybackTime(target, duration);
-    }
-
-    private void updatePlaybackTime() {
-        if (!videoActive || !videoPrepared) return;
-        updatePlaybackTime(videoView.getCurrentPosition(), videoView.getDuration());
-    }
-
-    private void updatePlaybackTime(int positionMs, int durationMs) {
-        playbackTime.setText(formatTime(positionMs) + " / " + formatTime(durationMs));
-    }
-
-    private String formatTime(int millis) {
-        int seconds = Math.max(0, millis / 1000);
-        if (seconds >= 3600) return String.format(java.util.Locale.TAIWAN,
-                "%d:%02d:%02d", seconds / 3600, (seconds / 60) % 60, seconds % 60);
-        return String.format(java.util.Locale.TAIWAN, "%02d:%02d", seconds / 60, seconds % 60);
-    }
-
-    private void stopVideo() {
-        clockHandler.removeCallbacks(clockTicker);
-        if (videoView != null) {
-            try {
-                videoView.stopPlayback();
-            } catch (RuntimeException ignored) {
-                // Not all video codecs initialize before the user changes items.
-            }
-            videoView.setVisibility(View.GONE);
+    private void toggleVideo(){
+        if(!currentIsVideo()||closed||!videoPrepared)return;
+        if(video.isPlaying())video.pause();
+        else{
+            if(video.getDuration()>0&&video.getCurrentPosition()>=video.getDuration()-250)video.seekTo(0);
+            video.start();
         }
-        videoActive = false;
-        videoPrepared = false;
-        if (playVideo != null) playVideo.setEnabled(true);
-        if (playbackTime != null) playbackTime.setVisibility(View.GONE);
+        buildBottomControls();
+        revealControls();
+    }
+    private void updateTimeline(){
+        if(!videoActive||!videoPrepared)return;
+        int duration=video.getDuration();
+        int position=Math.max(0,video.getCurrentPosition());
+        updatePlaybackTime(position,duration);
+        if(!draggingTimeline&&!draggingSeek&&timeline!=null&&duration>0)
+            timeline.setProgress(Math.round(position*1000f/duration));
+    }
+    private void updatePlaybackTime(int position,int duration){
+        if(timeElapsed!=null)timeElapsed.setText(formatTime(position));
+        if(timeTotal!=null)timeTotal.setText(formatTime(duration));
+    }
+    private String formatTime(int ms){
+        int sec=Math.max(0,ms/1000);
+        if(sec>=3600)return String.format(Locale.TAIWAN,"%d:%02d:%02d",sec/3600,(sec/60)%60,sec%60);
+        return String.format(Locale.TAIWAN,"%02d:%02d",sec/60,sec%60);
+    }
+    private void stopVideo(){
+        handler.removeCallbacks(hideControls);
+        handler.removeCallbacks(clockTicker);
+        if(video!=null){
+            try{video.stopPlayback();}catch(RuntimeException ignored){}
+            video.setVisibility(View.GONE);
+        }
+        videoActive=false;videoPrepared=false;draggingTimeline=false;draggingSeek=false;
+        timeline=null;timeElapsed=null;timeTotal=null;
+    }
+    private void releaseImage(){
+        if(image!=null)image.setImageDrawable(null);
+        Bitmap old=displayedBitmap;
+        displayedBitmap=null;
+        if(old!=null&&!old.isRecycled())old.recycle();
     }
 }
