@@ -52,6 +52,35 @@ for run_idx in {1..5}; do
    timeout 10s adb -s emulator-5554 shell screencap -p /sdcard/screen.png || true
    timeout 10s adb -s emulator-5554 pull /sdcard/screen.png "$DIAG_DIR/screen_start_run${run_idx}_api${API_LEVEL}.png" || true
 
+   # The results pane should dominate the screen, even before the first scan.
+   # Check bounds instead of hard-coding screen coordinates or display density.
+   if [[ "$run_idx" -eq 1 ]]; then
+       RESULT_BOUNDS=$(grep -oP 'resource-id="tw.mediaorganizer:id/result_list".*?bounds="\K[^"]+' window_dump_start.xml || true)
+       if [[ -z "$RESULT_BOUNDS" ]]; then
+           echo "ERROR: Main result list is missing from the screen."
+           exit 1
+       fi
+       read -r LIST_X1 LIST_Y1 LIST_X2 LIST_Y2 <<< "$(echo "$RESULT_BOUNDS" | tr -cs '0-9' ' ')"
+       SCREEN_SIZE=$(timeout 10s adb -s emulator-5554 shell wm size | grep -oE '[0-9]+x[0-9]+' | head -1 || true)
+       if [[ "$SCREEN_SIZE" =~ ^[0-9]+x[0-9]+$ ]]; then
+           SCREEN_HEIGHT="${SCREEN_SIZE#*x}"
+           if (( (LIST_Y2 - LIST_Y1) * 100 < SCREEN_HEIGHT * 45 )); then
+               echo "ERROR: Result list consumes less than 45% of the screen height: $RESULT_BOUNDS / $SCREEN_SIZE"
+               exit 1
+           fi
+           echo "PASS: Results list fills at least 45% of screen height: $RESULT_BOUNDS."
+       fi
+       EMPTY_BOUNDS=$(grep -oP 'resource-id="tw.mediaorganizer:id/empty_state".*?bounds="\K[^"]+' window_dump_start.xml || true)
+       if [[ -n "$EMPTY_BOUNDS" ]]; then
+           read -r EMPTY_X1 EMPTY_Y1 EMPTY_X2 EMPTY_Y2 <<< "$(echo "$EMPTY_BOUNDS" | tr -cs '0-9' ' ')"
+           if (( (EMPTY_X2 - EMPTY_X1) * 100 < (LIST_X2 - LIST_X1) * 70 )); then
+               echo "ERROR: Empty results card is too narrow: $EMPTY_BOUNDS / $RESULT_BOUNDS"
+               exit 1
+           fi
+           echo "PASS: Empty results card fills the available list width."
+       fi
+   fi
+
    if grep -q "search_input" window_dump_start.xml; then
        echo "ERROR: Removed filename/folder search is still present."
        exit 1
