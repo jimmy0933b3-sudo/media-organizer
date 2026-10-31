@@ -61,6 +61,8 @@ javac -d .test-classes app/src/main/java/tw/mediaorganizer/DeletedMediaRegistry.
 java -cp .test-classes tw.mediaorganizer.DeletedMediaRegistryTest
 javac -d .test-classes app/src/main/java/tw/mediaorganizer/PreviewZoom.java tests/PreviewZoomTest.java
 java -cp .test-classes tw.mediaorganizer.PreviewZoomTest
+javac -d .test-classes app/src/main/java/tw/mediaorganizer/FastScrollMath.java tests/FastScrollMathTest.java
+java -cp .test-classes tw.mediaorganizer.FastScrollMathTest
 
 java -cp .test-classes tw.mediaorganizer.SimilarityTest
 java -cp .test-classes tw.mediaorganizer.ScanAndDeleteTest
