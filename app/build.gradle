@@ -2,7 +2,7 @@ plugins { id 'com.android.application' }
 android {
  namespace 'tw.mediaorganizer'
  compileSdk 35
- defaultConfig { applicationId 'tw.mediaorganizer'; minSdk 30; targetSdk 35; versionCode 17; versionName '1.8.6' }
+ defaultConfig { applicationId 'tw.mediaorganizer'; minSdk 30; targetSdk 35; versionCode 18; versionName '1.8.7' }
  compileOptions { sourceCompatibility JavaVersion.VERSION_1_8; targetCompatibility JavaVersion.VERSION_1_8 }
  buildFeatures { buildConfig false }
  // Only use the keystore injected by GitHub Actions for distributable builds.
