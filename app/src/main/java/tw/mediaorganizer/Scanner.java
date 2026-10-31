@@ -11,7 +11,7 @@ import java.util.*;
 
 final class Scanner {
  static final class Item {
-  Uri uri;String name,mime,path;long size,duration;boolean video;File thumb;Similarity.Signature[] signatures;List<FaceEngine.FaceSample> faces=new ArrayList<>();boolean removed;
+  Uri uri;String name,mime,path;long size,duration;boolean video;File thumb;Similarity.Signature[] signatures;List<FaceEngine.FaceSample> faces=new ArrayList<>();volatile boolean removed;
  }
  static final class Group {
   String title;
@@ -57,7 +57,8 @@ final class Scanner {
   synchronized(result){for(Item item:result.all)sizes.computeIfAbsent((item.video?"v":"p")+item.size,k->new ArrayList<>()).add(item);}
   Map<String,Group> hashes=new LinkedHashMap<>();int i=0;
   for(List<Item> candidates:sizes.values())if(candidates.size()>1)for(Item item:candidates){
-   check(result);progress.report("檔案雜湊核對 · "+(++i)+" 個候選");
+   check(result);if(item.removed||ScanService.isDeleted(item.uri))continue;
+   progress.report("檔案雜湊核對 · "+(++i)+" 個候選");
    try{
     String hash=sha(item.uri,result);
     Group group=hashes.computeIfAbsent((item.video?"v":"p")+hash,k->new Group("完全重複 · SHA-256"));
@@ -79,9 +80,11 @@ final class Scanner {
    int total;synchronized(result){total=result.all.size();}
    for(i=0;i<total;i++){
     check(result);Item item;synchronized(result){item=result.all.get(i);}
+    if(item.removed||ScanService.isDeleted(item.uri))continue;
     progress.report("分析 "+(i+1)+" / "+total+" · "+item.name);
     try{
      analyze(item,engine,result);
+     if(item.removed||ScanService.isDeleted(item.uri))continue;
      if(item.signatures!=null){
       Group found=null;
       for(Group g:representatives){
@@ -146,7 +149,7 @@ final class Scanner {
   }
   String[] selectionArgs=selectionArgsList.isEmpty()?null:selectionArgsList.toArray(new String[0]);
   try(Cursor cursor=context.getContentResolver().query(base,columns,selection.toString(),selectionArgs,"date_added DESC")){
-   if(cursor==null)return;while(cursor.moveToNext()){check(result);Item item=new Item();item.uri=ContentUris.withAppendedId(base,cursor.getLong(0));item.name=cursor.getString(1);item.mime=cursor.getString(2);item.size=cursor.getLong(3);item.path=cursor.getString(4);item.video=video;item.duration=video?cursor.getLong(5):0;synchronized(result){result.all.add(item);}}
+   if(cursor==null)return;while(cursor.moveToNext()){check(result);Item item=new Item();item.uri=ContentUris.withAppendedId(base,cursor.getLong(0));item.name=cursor.getString(1);item.mime=cursor.getString(2);item.size=cursor.getLong(3);item.path=cursor.getString(4);item.video=video;item.duration=video?cursor.getLong(5):0;if(ScanService.isDeleted(item.uri))continue;synchronized(result){result.all.add(item);}}
   }catch(SecurityException e){progress.report((video?"影片":"圖片")+"讀取權限不足");}
  }
  private String sha(Uri uri,Result result)throws IOException,InterruptedException,NoSuchAlgorithmException{
