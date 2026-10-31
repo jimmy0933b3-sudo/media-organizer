@@ -49,6 +49,42 @@ public class ScanService extends Service {
     private static volatile boolean scanning = false;
     private static volatile boolean cancelled = false;
     private static volatile Scanner.Result currentSnapshot;
+    // Verified deletions outlive transient scanner snapshots and must win over
+    // callbacks from analysis that started before Android removed the file.
+    private static final DeletedMediaRegistry deletedMedia = new DeletedMediaRegistry();
+
+    public static boolean isDeleted(Uri uri) {
+        return uri != null && deletedMedia.contains(uri.toString());
+    }
+
+    public static void recordVerifiedDeletes(java.util.Collection<Uri> uris) {
+        if (uris == null || uris.isEmpty()) return;
+        for (Uri uri : uris) {
+            if (uri != null) deletedMedia.record(uri.toString());
+        }
+        applyVerifiedDeletes(currentSnapshot);
+    }
+
+    public static void applyVerifiedDeletes(Scanner.Result result) {
+        if (result == null) return;
+        synchronized (result) {
+            for (Scanner.Item item : result.all) {
+                if (item.uri != null && isDeleted(item.uri)) item.removed = true;
+            }
+            // Group snapshots normally share Item references with result.all;
+            // handle any different copies defensively.
+            for (java.util.List<Scanner.Group> groups :
+                    java.util.Arrays.asList(result.exact, result.similar, result.people)) {
+                for (Scanner.Group group : groups) {
+                    synchronized (group) {
+                        for (Scanner.Item item : group.items) {
+                            if (item.uri != null && isDeleted(item.uri)) item.removed = true;
+                        }
+                    }
+                }
+            }
+        }
+    }
     private static volatile String currentStatus = "掃描中，可即時查看結果與進行處理…";
     private static volatile long scanGeneration = 0;
     private static Context currentAppContext;
@@ -62,6 +98,7 @@ public class ScanService extends Service {
                 listener.onProgress(currentStatus);
             }
             if (currentSnapshot != null && currentScanGeneration >= currentGeneration.get()) {
+                applyVerifiedDeletes(currentSnapshot);
                 listener.onPartialResult(currentSnapshot, currentScanGeneration);
             }
         }
@@ -124,6 +161,7 @@ public class ScanService extends Service {
 
                     @Override
                     public void onPartialResult(Scanner.Result partial) {
+                        applyVerifiedDeletes(partial);
                         currentSnapshot = partial;
                         ScanListener l = activeListener;
                         if (l != null) l.onPartialResult(partial, jobGen);
@@ -131,6 +169,7 @@ public class ScanService extends Service {
                 }, faces, new int[]{5, 8, 12}[setting], new double[]{.72, .65, .58}[setting], filters, mediaType, jobGen);
 
                 Scanner.Result scanned = scanner.run();
+                applyVerifiedDeletes(scanned);
                 currentSnapshot = scanned;
                 saveScanCache(appContext, scanned, jobGen);
 
@@ -241,6 +280,9 @@ public class ScanService extends Service {
                     JSONObject root = new JSONObject();
                     JSONArray all = new JSONArray();
                     Map<Scanner.Item, Integer> itemMap = new HashMap<>();
+                    // Reconcile even snapshots queued for disk I/O before
+                    // Android's delete permission finished.
+                    applyVerifiedDeletes(res);
                     synchronized (res) {
                         for (int i = 0; i < res.all.size(); i++) {
                             Scanner.Item item = res.all.get(i);
