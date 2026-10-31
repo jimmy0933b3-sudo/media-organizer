@@ -7,6 +7,7 @@ import android.content.pm.PackageManager;
 import android.graphics.*;
 import android.net.Uri;
 import android.provider.MediaStore;
+import android.provider.Settings;
 import android.view.*;
 import android.widget.*;
 import androidx.recyclerview.widget.*;
@@ -29,6 +30,10 @@ public class MainActivity extends AppCompatActivity implements ScanService.ScanL
  private TextView status,selection,srcLabel;
  private TextView[] tabButtons;
  private View footerContainer;
+ private TextView manageMediaPermissionStatus;
+ private Button manageMediaPermissionButton;
+ private boolean manageMediaSettingsLaunched;
+ private boolean continueDeleteAfterManageMediaSettings;
  private android.widget.Switch people,bgScan;private Spinner strictness,mediaTypeSpinner;private Button scan,move,deleteBtn,cancel;
  private final ExecutorService fileWorker=Executors.newSingleThreadExecutor();
  private volatile boolean dead,busy;private Scanner.Result result;
@@ -693,6 +698,7 @@ public int getItemCount() { return data.size(); }
  private View settingsScreen;
  private void showSettingsDialog(){
   if (settingsScreen != null) {
+      refreshMediaManagementAccessUi();
       settingsScreen.setVisibility(View.VISIBLE);
       mainContent.setVisibility(View.GONE);
       return;
@@ -784,6 +790,26 @@ public int getItemCount() { return data.size(); }
   analysisCard.addView(sBox);
 
   rootLayout.addView(analysisCard);
+
+  // Android 12+ optional one-time media management special access.
+  rootLayout.addView(settingsTitle("刪除確認設定"));
+  LinearLayout accessCard=createCard();
+  manageMediaPermissionStatus=text("",13);
+  manageMediaPermissionStatus.setTextColor(TEXT_SEC);
+  accessCard.addView(manageMediaPermissionStatus,
+      new LinearLayout.LayoutParams(-1,-2));
+  manageMediaPermissionButton=button("開啟媒體管理權限",
+      ()->explainAndOpenManageMediaSettings(false));
+  LinearLayout.LayoutParams accessButtonLp=new LinearLayout.LayoutParams(-1,dp(44));
+  accessButtonLp.setMargins(0,dp(8),0,dp(6));
+  accessCard.addView(manageMediaPermissionButton,accessButtonLp);
+  TextView accessHint=text(
+      "只有你能在 Android 系統設定授權。這只減少重複的系統刪除提示；"
+      +"每次永久刪除前，App 仍會詢問你確認。授權可隨時撤銷。",12);
+  accessHint.setTextColor(TEXT_SEC);
+  accessCard.addView(accessHint);
+  rootLayout.addView(accessCard);
+  refreshMediaManagementAccessUi();
 
   // Group: 工具
   rootLayout.addView(settingsTitle("工具"));
