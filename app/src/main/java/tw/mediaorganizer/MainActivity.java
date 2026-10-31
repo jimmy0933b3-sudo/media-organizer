@@ -26,7 +26,8 @@ public class MainActivity extends AppCompatActivity implements ScanService.ScanL
  private LinearLayout mainContent;
  private androidx.recyclerview.widget.RecyclerView list;
  private ItemAdapter adapter;
- private final android.util.LruCache<String, android.graphics.Bitmap> thumbCache = new android.util.LruCache<String, android.graphics.Bitmap>((int)(Runtime.getRuntime().maxMemory()/1024)/8){protected int sizeOf(String k,android.graphics.Bitmap v){return v.getByteCount()/1024;}};private TextView status,selection,srcLabel;
+ private ThumbnailLoader thumbnailLoader;
+ private TextView status,selection,srcLabel;
  private TextView[] tabButtons;
  private View footerContainer;
  private android.widget.Switch people,bgScan;private Spinner strictness,mediaTypeSpinner;private Button scan,move,deleteBtn,cancel;
@@ -43,6 +44,7 @@ public class MainActivity extends AppCompatActivity implements ScanService.ScanL
  public static class MoveRecord {Uri uri;String oldPath,oldName,newPath,newName;Scanner.Item item;}
  public void onCreate(Bundle saved){
   super.onCreate(saved);
+  thumbnailLoader = new ThumbnailLoader(this);
   getWindow().setStatusBarColor(BG);getWindow().setNavigationBarColor(BG);
   build();
   ScanService.setListener(this);
@@ -373,7 +375,7 @@ public class MainActivity extends AppCompatActivity implements ScanService.ScanL
  }
 
  private void startScan(){
-  selected.clear();expandedGroups.clear();result=new Scanner.Result();render();setBusy(true);
+  selected.clear();expandedGroups.clear();thumbnailLoader.reset();result=new Scanner.Result();render();setBusy(true);
   status.setText("掃描中，可即時查看結果與進行處理…");
   final boolean faces=people.isChecked();
   final boolean isBgScan=bgScan.isChecked();
@@ -621,26 +623,11 @@ public class MainActivity extends AppCompatActivity implements ScanService.ScanL
              View v = holder.itemView;
              CheckBox box = v.findViewById(201); box.setOnCheckedChangeListener(null); box.setChecked(item.checked);
              box.setOnCheckedChangeListener((cb, checked) -> { if(checked) selected.add(item.item); else selected.remove(item.item); updateSelection(); item.checked = checked; v.findViewById(204).setVisibility(checked?View.VISIBLE:View.GONE); });
-             ImageView thumb = v.findViewById(202); thumb.setImageBitmap(null);
+             ImageView thumb = v.findViewById(202);
              ImageView videoIcon = v.findViewById(205);
              if (videoIcon != null) videoIcon.setVisibility(item.item.video ? View.VISIBLE : View.GONE);
-             thumb.setTag(item.item.uri.toString());
-             if (item.item.thumb != null) {
-                 android.graphics.Bitmap c = thumbCache.get(item.item.thumb.getPath());
-                 if (c != null) thumb.setImageBitmap(c);
-                 else {
-                     final String currentTag = item.item.uri.toString();
-                     tw.mediaorganizer.OperationController.getInstance().getThumbWorker().execute(() -> {
-                         android.graphics.Bitmap b = smallThumb(item.item.thumb);
-                         if(b != null) {
-                             thumbCache.put(item.item.thumb.getPath(), b);
-                             ui(() -> { if(currentTag.equals(thumb.getTag())) thumb.setImageBitmap(b); });
-                         }
-                     });
-                 }
-             } else {
-                 thumb.setImageBitmap(null);
-             }
+             // MediaStore thumbnails work before the slower similarity scan reaches this item.
+             thumbnailLoader.bind(thumb, item.item);
              thumb.setOnClickListener(img -> preview(item.item));
              TextView label = v.findViewById(203);
              String textLabel = item.item.name + "\n" + format(item.item.size) + (item.item.video ? " · " + item.item.duration / 1000 + " 秒" : "") + "\n" + item.item.path;
@@ -720,7 +707,6 @@ public int getItemCount() { return data.size(); }
   }
   if(adapter!=null)adapter.update(newData);
  }
- private Bitmap smallThumb(File file){BitmapFactory.Options options=new BitmapFactory.Options();options.inSampleSize=1;return BitmapFactory.decodeFile(file.getPath(),options);}
  private View settingsScreen;
  private void showSettingsDialog(){
   if (settingsScreen != null) {
@@ -873,7 +859,50 @@ public int getItemCount() { return data.size(); }
   if(deleteBtn!=null)deleteBtn.setEnabled(!selected.isEmpty()&&!op().fileBusy());
   if(footerContainer!=null) footerContainer.setVisibility(selected.isEmpty() ? View.GONE : View.VISIBLE);
  }
- private void preview(Scanner.Item item){try{Intent intent=new Intent(Intent.ACTION_VIEW);intent.setDataAndType(item.uri,item.mime!=null?item.mime:item.video?"video/*":"image/*");intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);startActivity(intent);}catch(ActivityNotFoundException e){new androidx.appcompat.app.AlertDialog.Builder(this).setMessage("手機沒有可開啟此媒體的應用程式。").setPositiveButton("確定",null).show();}}
+ private void preview(Scanner.Item tapped) {
+  // Include the whole active category, not just the first 12 rows or 20 groups.
+  // Keep the current search filter and dedupe items repeated across groups.
+  LinkedHashMap<String, Scanner.Item> ordered = new LinkedHashMap<>();
+  String query = searchInput == null ? "" :
+      searchInput.getText().toString().trim().toLowerCase(Locale.ROOT);
+  if (result != null) {
+   if (mode == 3) {
+    for (Scanner.Item item : result.all) {
+     if (!item.removed && matchesPreviewFilter(item, query))
+      ordered.putIfAbsent(item.uri.toString(), item);
+    }
+   } else {
+    List<Scanner.Group> groups = mode == 0 ? result.exact :
+        mode == 1 ? result.similar : result.people;
+    for (Scanner.Group group : groups) {
+     int activeCount = 0;
+     for (Scanner.Item item : group.items) if (!item.removed) activeCount++;
+     if (activeCount < 2) continue;
+     for (Scanner.Item item : group.items) {
+      if (!item.removed && matchesPreviewFilter(item, query))
+       ordered.putIfAbsent(item.uri.toString(), item);
+     }
+    }
+   }
+  }
+  ordered.putIfAbsent(tapped.uri.toString(), tapped);
+  ArrayList<Scanner.Item> items = new ArrayList<>(ordered.values());
+  int index = 0;
+  for (int i = 0; i < items.size(); i++) {
+   if (items.get(i).uri.equals(tapped.uri)) {
+    index = i;
+    break;
+   }
+  }
+  new MediaPreviewDialog(this, items, index).show();
+ }
+ private boolean matchesPreviewFilter(Scanner.Item item, String query) {
+  if (query.isEmpty()) return true;
+  String name = item.name == null ? "" : item.name;
+  String path = item.path == null ? "" : item.path;
+  return name.toLowerCase(Locale.ROOT).contains(query)
+      || path.toLowerCase(Locale.ROOT).contains(query);
+ }
  private String validateDestination(String input){
   if(input==null)input="";input=input.trim();
   if(input.endsWith("/"))input=input.substring(0,input.length()-1);
@@ -1280,7 +1309,7 @@ public int getItemCount() { return data.size(); }
  public synchronized void removeJournal(Uri uri)throws Exception{JSONArray a=readJournal(),next=new JSONArray();for(int i=0;i<a.length();i++)if(!a.getJSONObject(i).getString("uri").equals(uri.toString()))next.put(a.getJSONObject(i));writeJournal(next);}
  private void undo(){if(op().fileBusy()||busy)return;try{JSONArray a=readJournal();if(a.length()==0){status.setText("沒有可復原的移動紀錄。");return;}new androidx.appcompat.app.AlertDialog.Builder(this).setTitle("復原上次移動").setMessage("將 "+a.length()+" 個紀錄移回原資料夾。同名檔會加識別碼；已不存在的檔案會列為失敗。").setNegativeButton("取消",null).setPositiveButton("復原",(d,w)->{try{op().setPending(new ArrayList<>());for(int i=0;i<a.length();i++){JSONObject o=a.getJSONObject(i);MoveRecord r=new MoveRecord();r.uri=Uri.parse(o.getString("uri"));r.newPath=o.getString("path");r.newName=o.getString("name");op().getPending().add(r);}op().setUndoing(true);op().setOperationHasSuccess(false);op().setOperationMoved(0);op().setOperationFailed(0);op().setFileBusy(true);updateSelection();requestWrite();}catch(Exception e){status.setText("復原紀錄無法讀取。");}}).show();}catch(Exception e){status.setText("復原紀錄無法讀取。");}}
  private void help(){new androidx.appcompat.app.AlertDialog.Builder(this).setTitle("使用說明與隱私").setMessage("1. 授權所有照片與影片後開始掃描。可篩選來源資料夾，或對全相簿掃描。\n2. 重複採 SHA-256；相似照片使用感知雜湊、色彩與比例，影片抽取 7 個畫面。\n3. 人物在手機內用 MobileFaceNet 比對抽樣人臉；分數不是準確率。正面清楚人臉效果較好。\n4. 掃描過程中即可即時勾選檔案進行『移到此資料夾』或『刪除』。\n5. 不自動刪除、不上傳、不在背景持續監控。\n6. 復原只保留上次移動批次。清快取只移除本程式縮圖，不動原照片／影片。").setPositiveButton("關閉",null).show();}
- private void clearThumbs(){resultGeneration = ScanService.clearCacheAsync(this);}
+ private void clearThumbs(){if(thumbnailLoader!=null)thumbnailLoader.reset();resultGeneration = ScanService.clearCacheAsync(this);}
  private File cacheFile(){return new File(getFilesDir(),"scan-cache.json");}
  public void saveScanCache(Scanner.Result res){
   if(res==null)return;
@@ -1333,6 +1362,7 @@ public int getItemCount() { return data.size(); }
 
  protected void onDestroy(){
   dead=true;
+  if(thumbnailLoader!=null)thumbnailLoader.close();
   ScanService.removeListener(this);
     super.onDestroy();
  }

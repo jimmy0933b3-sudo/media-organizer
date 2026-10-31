@@ -49,6 +49,9 @@ javac -cp .test-classes -d .test-classes tests/SimilarityTest.java tests/ScanAnd
 # Compile OperationState and test with the real org.json jar
 javac -cp ".test-classes:.test-classes/json-20231013.jar" -d .test-classes app/src/main/java/tw/mediaorganizer/OperationState.java app/src/main/java/tw/mediaorganizer/OperationController.java app/src/main/java/tw/mediaorganizer/OperationListener.java tests/FileOperationTest.java
 
+javac -d .test-classes app/src/main/java/tw/mediaorganizer/PreviewNavigation.java tests/PreviewNavigationTest.java
+java -cp .test-classes tw.mediaorganizer.PreviewNavigationTest
+
 java -cp .test-classes tw.mediaorganizer.SimilarityTest
 java -cp .test-classes tw.mediaorganizer.ScanAndDeleteTest
 java -cp ".test-classes:.test-classes/json-20231013.jar" tw.mediaorganizer.FileOperationTest
