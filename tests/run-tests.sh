@@ -53,6 +53,8 @@ javac -d .test-classes app/src/main/java/tw/mediaorganizer/PreviewNavigation.jav
 java -cp .test-classes tw.mediaorganizer.PreviewNavigationTest
 javac -d .test-classes app/src/main/java/tw/mediaorganizer/VideoSwipeSeek.java tests/VideoSwipeSeekTest.java
 java -cp .test-classes tw.mediaorganizer.VideoSwipeSeekTest
+javac -d .test-classes app/src/main/java/tw/mediaorganizer/PreviewZoom.java tests/PreviewZoomTest.java
+java -cp .test-classes tw.mediaorganizer.PreviewZoomTest
 
 java -cp .test-classes tw.mediaorganizer.SimilarityTest
 java -cp .test-classes tw.mediaorganizer.ScanAndDeleteTest
