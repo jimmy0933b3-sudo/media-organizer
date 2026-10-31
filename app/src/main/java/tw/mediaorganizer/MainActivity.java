@@ -277,8 +277,14 @@ public class MainActivity extends AppCompatActivity implements ScanService.ScanL
   loadOpState();
   if (op().fileBusy()) {
       if (op().isDeleting() && op().getPendingDeletes() != null && !op().getPendingDeletes().isEmpty()) {
-          requestDeleteBatch();
-      } else if (op().getPending() != null && !op().getPending().isEmpty()) {
+           new androidx.appcompat.app.AlertDialog.Builder(this)
+             .setTitle("找到未完成的刪除操作")
+             .setMessage("上次的系統刪除授權尚未完整核對。請重新確認，"
+               +"或選擇取消；未核對的檔案不會算作已刪除。")
+             .setPositiveButton("重新確認",(d,w)->requestDeleteBatch())
+             .setNegativeButton("取消",(d,w)->failPendingDeletion("已取消上次未完成的刪除操作。"))
+             .show();
+       } else if (op().getPending() != null && !op().getPending().isEmpty()) {
           requestWrite();
       } else {
           op().setFileBusy(false);
@@ -1041,27 +1047,22 @@ private void finishDeleteOperation(String reason){
             op().setOperationDeleteFailed(root.optInt("operationDeleteFailed", 0));
 
             if (root.has("pendingDeletes")) {
-                op().setPendingDeletes(new java.util.ArrayList<>());
-                JSONArray deletes = root.getJSONArray("pendingDeletes");
-                for (int i = 0; i < deletes.length(); i++) {
-                    Scanner.Item item = new Scanner.Item();
-                    item.uri = Uri.parse(deletes.getString(i));
-                    boolean exists = false;
-                    try (android.database.Cursor c = getContentResolver().query(item.uri, new String[]{MediaStore.MediaColumns._ID}, null, null, null)) {
-                        if (c != null && c.moveToFirst()) exists = true;
-                    } catch (Exception e) {}
-                    if (!exists) { op().addOperationDeleted(1); continue; }
-                    if (result != null) {
-                        for (Scanner.Item existing : result.all) {
-                            if (existing.uri.equals(item.uri)) { item = existing; break; }
-                        }
-                    }
-                    op().getPendingDeletes().add(item);
-                }
-                if(op().getPendingDeletes().isEmpty()) { op().setPendingDeletes(null); } else { op().setFileBusy(true); }
-            }
+  op().setPendingDeletes(new ArrayList<>());
+  JSONArray deletes=root.getJSONArray("pendingDeletes");
+  for(int i=0;i<deletes.length();i++){
+   Scanner.Item item=new Scanner.Item();
+   item.uri=Uri.parse(deletes.getString(i));
+   // An unreadable MediaStore row does not prove the file was deleted.
+   if(result!=null)for(Scanner.Item current:result.all){
+    if(current.uri.equals(item.uri)){item=current;break;}
+   }
+   op().getPendingDeletes().add(item);
+  }
+  if(op().getPendingDeletes().isEmpty())op().setPendingDeletes(null);
+  else op().setFileBusy(true);
+ }
 
-            if (root.has("pending")) {
+ if (root.has("pending")) {
                 op().setPending(new java.util.ArrayList<>());
                 JSONArray moves = root.getJSONArray("pending");
                 for (int i = 0; i < moves.length(); i++) {
@@ -1264,7 +1265,7 @@ private void failPendingDeletion(String reason){
  }
  public synchronized void removeJournal(Uri uri)throws Exception{JSONArray a=readJournal(),next=new JSONArray();for(int i=0;i<a.length();i++)if(!a.getJSONObject(i).getString("uri").equals(uri.toString()))next.put(a.getJSONObject(i));writeJournal(next);}
  private void undo(){if(op().fileBusy()||busy)return;try{JSONArray a=readJournal();if(a.length()==0){status.setText("沒有可復原的移動紀錄。");return;}new androidx.appcompat.app.AlertDialog.Builder(this).setTitle("復原上次移動").setMessage("將 "+a.length()+" 個紀錄移回原資料夾。同名檔會加識別碼；已不存在的檔案會列為失敗。").setNegativeButton("取消",null).setPositiveButton("復原",(d,w)->{try{op().setPending(new ArrayList<>());for(int i=0;i<a.length();i++){JSONObject o=a.getJSONObject(i);MoveRecord r=new MoveRecord();r.uri=Uri.parse(o.getString("uri"));r.newPath=o.getString("path");r.newName=o.getString("name");op().getPending().add(r);}op().setUndoing(true);op().setOperationHasSuccess(false);op().setOperationMoved(0);op().setOperationFailed(0);op().setFileBusy(true);updateSelection();requestWrite();}catch(Exception e){status.setText("復原紀錄無法讀取。");}}).show();}catch(Exception e){status.setText("復原紀錄無法讀取。");}}
- private void help(){new androidx.appcompat.app.AlertDialog.Builder(this).setTitle("使用說明與隱私").setMessage("1. 授權所有照片與影片後開始掃描。可篩選來源資料夾，或對全相簿掃描。\n2. 重複採 SHA-256；相似照片使用感知雜湊、色彩與比例，影片抽取 7 個畫面。\n3. 人物在手機內用 MobileFaceNet 比對抽樣人臉；分數不是準確率。正面清楚人臉效果較好。\n4. 掃描過程中即可即時勾選檔案進行『移到此資料夾』或『刪除』。\n5. 不自動刪除、不上傳、不在背景持續監控。\n6. 復原只保留上次移動批次。清快取只移除本程式縮圖，不動原照片／影片。").setPositiveButton("關閉",null).show();}
+ private void help(){new androidx.appcompat.app.AlertDialog.Builder(this).setTitle("使用說明與隱私").setMessage("1. 授權所有照片與影片後開始掃描。可篩選來源資料夾，或對全相簿掃描。\n2. 重複採 SHA-256；相似照片使用感知雜湊、色彩與比例，影片抽取 7 個畫面。\n3. 人物在手機內用 MobileFaceNet 比對抽樣人臉；分數不是準確率。正面清楚人臉效果較好。\n4. 掃描進行中可查看與勾選，請先等待完成或停止掃描後再執行移動／刪除。\n5. 不自動刪除、不上傳、不在背景持續監控。\n6. 復原只保留上次移動批次。清快取只移除本程式縮圖，不動原照片／影片。").setPositiveButton("關閉",null).show();}
  private void clearThumbs(){if(thumbnailLoader!=null)thumbnailLoader.reset();resultGeneration = ScanService.clearCacheAsync(this);}
  private File cacheFile(){return new File(getFilesDir(),"scan-cache.json");}
  public void saveScanCache(Scanner.Result res){
