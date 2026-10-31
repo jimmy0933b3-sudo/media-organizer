@@ -7,6 +7,7 @@ import android.content.pm.PackageManager;
 import android.graphics.*;
 import android.net.Uri;
 import android.provider.MediaStore;
+import android.provider.Settings;
 import android.view.*;
 import android.widget.*;
 import androidx.recyclerview.widget.*;
@@ -29,6 +30,10 @@ public class MainActivity extends AppCompatActivity implements ScanService.ScanL
  private TextView status,selection,srcLabel;
  private TextView[] tabButtons;
  private View footerContainer;
+ private TextView manageMediaPermissionStatus;
+ private Button manageMediaPermissionButton;
+ private boolean manageMediaSettingsLaunched;
+ private boolean continueDeleteAfterManageMediaSettings;
  private android.widget.Switch people,bgScan;private Spinner strictness,mediaTypeSpinner;private Button scan,move,deleteBtn,cancel;
  private final ExecutorService fileWorker=Executors.newSingleThreadExecutor();
  private volatile boolean dead,busy;private Scanner.Result result;
@@ -693,6 +698,7 @@ public int getItemCount() { return data.size(); }
  private View settingsScreen;
  private void showSettingsDialog(){
   if (settingsScreen != null) {
+      refreshMediaManagementAccessUi();
       settingsScreen.setVisibility(View.VISIBLE);
       mainContent.setVisibility(View.GONE);
       return;
@@ -784,6 +790,26 @@ public int getItemCount() { return data.size(); }
   analysisCard.addView(sBox);
 
   rootLayout.addView(analysisCard);
+
+  // Android 12+ optional one-time media management special access.
+  rootLayout.addView(settingsTitle("刪除確認設定"));
+  LinearLayout accessCard=createCard();
+  manageMediaPermissionStatus=text("",13);
+  manageMediaPermissionStatus.setTextColor(TEXT_SEC);
+  accessCard.addView(manageMediaPermissionStatus,
+      new LinearLayout.LayoutParams(-1,-2));
+  manageMediaPermissionButton=button("開啟媒體管理權限",
+      ()->explainAndOpenManageMediaSettings(false));
+  LinearLayout.LayoutParams accessButtonLp=new LinearLayout.LayoutParams(-1,dp(44));
+  accessButtonLp.setMargins(0,dp(8),0,dp(6));
+  accessCard.addView(manageMediaPermissionButton,accessButtonLp);
+  TextView accessHint=text(
+      "只有你能在 Android 系統設定授權。這只減少重複的系統刪除提示；"
+      +"每次永久刪除前，App 仍會詢問你確認。授權可隨時撤銷。",12);
+  accessHint.setTextColor(TEXT_SEC);
+  accessCard.addView(accessHint);
+  rootLayout.addView(accessCard);
+  refreshMediaManagementAccessUi();
 
   // Group: 工具
   rootLayout.addView(settingsTitle("工具"));
@@ -906,6 +932,85 @@ public int getItemCount() { return data.size(); }
   String target=validateDestination(folderName);if(target==null)return;ArrayList<Scanner.Item> snapshot=new ArrayList<>(selected);
   new androidx.appcompat.app.AlertDialog.Builder(this).setTitle("確認移動 "+snapshot.size()+" 個檔案").setMessage("目的地："+target+"\n移動後會離開原資料夾；不刪除重複檔。相似與人物分組請先確認。\n同名檔會加上識別碼，不覆蓋既有檔案。\n這次成功的移動會取代上次復原紀錄。").setNegativeButton("取消",null).setPositiveButton("移動",(d,w)->{op().setDestination(target);op().setPending(new ArrayList<>());for(Scanner.Item item:snapshot)if(!target.equals(item.path)){MoveRecord r=new MoveRecord();r.uri=item.uri;r.oldPath=item.path;r.oldName=item.name;r.newPath=target;r.newName=item.name;r.item=item;op().getPending().add(r);}op().setUndoing(false);op().setDeleting(false);op().setOperationHasSuccess(false);op().setOperationMoved(0);op().setOperationFailed(0);op().setFileBusy(true);backupJournal();updateSelection();requestWrite();}).show();
  }
+private boolean canManageMedia() {
+ if(!MediaManageFlow.supported(Build.VERSION.SDK_INT))return false;
+ try { return MediaStore.canManageMedia(this); }
+ catch (RuntimeException e) {
+  android.util.Log.w("MediaOrganizer","Unable to check manage-media permission",e);
+  return false;
+ }
+}
+private void refreshMediaManagementAccessUi() {
+ if(manageMediaPermissionStatus==null||manageMediaPermissionButton==null)return;
+ if(!MediaManageFlow.supported(Build.VERSION.SDK_INT)){
+  manageMediaPermissionStatus.setText("Android 11 不支援一次授權；刪除仍需系統逐批確認。");
+  manageMediaPermissionButton.setText("此 Android 版本不支援");
+  manageMediaPermissionButton.setEnabled(false);
+ }else if(canManageMedia()){
+  manageMediaPermissionStatus.setText("已授權。Android 通常不會再逐批跳出刪除確認。");
+  manageMediaPermissionButton.setText("已授權（可在系統設定撤銷）");
+  manageMediaPermissionButton.setEnabled(false);
+ }else{
+  manageMediaPermissionStatus.setText("未授權。可前往 Android 設定授予一次媒體管理權限。");
+  manageMediaPermissionButton.setText("前往系統設定開啟");
+  manageMediaPermissionButton.setEnabled(true);
+ }
+}
+private void explainAndOpenManageMediaSettings(boolean resumeDelete) {
+ if(!MediaManageFlow.supported(Build.VERSION.SDK_INT)){
+  if(resumeDelete)requestDeleteBatch();
+  else Toast.makeText(this,"此裝置需要 Android 12 以上版本",Toast.LENGTH_SHORT).show();
+  return;
+ }
+ new androidx.appcompat.app.AlertDialog.Builder(this)
+  .setTitle("媒體管理特殊權限")
+  .setMessage("此權限需由你在 Android 系統設定親自授予。\n\n"
+    +"授權後，本 App 每次仍會詢問是否永久刪除檔案，"
+    +"但 Android 通常不必再逐批顯示第二次確認。\n\n"
+    +"授權不會啟用自動刪除，也不會自動開放所有照片的讀取權限。")
+  .setPositiveButton("前往系統設定",(d,w)->openManageMediaSettings(resumeDelete))
+  .setNegativeButton(resumeDelete?"繼續原本確認":"取消",(d,w)->{
+    if(resumeDelete)requestDeleteBatch();
+  }).show();
+}
+private void openManageMediaSettings(boolean resumeDelete) {
+ if(!MediaManageFlow.supported(Build.VERSION.SDK_INT)){
+  if(resumeDelete)requestDeleteBatch();
+  return;
+ }
+ if(resumeDelete)saveOpState();
+ continueDeleteAfterManageMediaSettings=resumeDelete;
+ manageMediaSettingsLaunched=true;
+ try{
+  startActivity(new Intent(Settings.ACTION_REQUEST_MANAGE_MEDIA));
+ }catch(Exception e){
+  manageMediaSettingsLaunched=false;
+  continueDeleteAfterManageMediaSettings=false;
+  android.util.Log.w("MediaOrganizer","Manage-media settings unavailable",e);
+  refreshMediaManagementAccessUi();
+  if(resumeDelete){
+    status.setText("無法進入一次授權設定，改用 Android 原本的刪除確認。");
+    requestDeleteBatch();
+  }else{
+    new androidx.appcompat.app.AlertDialog.Builder(this)
+      .setTitle("無法開啟權限設定")
+      .setMessage("這台裝置沒有提供媒體管理設定畫面，仍可用系統逐批確認刪除。")
+      .setPositiveButton("知道了",null).show();
+  }
+ }
+}
+@Override protected void onResume(){
+ super.onResume();
+ refreshMediaManagementAccessUi();
+ if(!manageMediaSettingsLaunched)return;
+ manageMediaSettingsLaunched=false;
+ boolean resumeDelete=continueDeleteAfterManageMediaSettings;
+ continueDeleteAfterManageMediaSettings=false;
+ if(!resumeDelete||!op().isDeleting()||op().getPendingDeletes()==null)return;
+ if(canManageMedia())status.setText("已啟用媒體管理權限，開始刪除並逐筆核對。");
+ else status.setText("未授予一次權限，將沿用 Android 系統的刪除確認。");
+ requestDeleteBatch();
+}
 private void confirmDelete(){
  if(selected.isEmpty())return;
  if(op().fileBusy()){
@@ -918,9 +1023,10 @@ private void confirmDelete(){
  if(snapshot.isEmpty()){status.setText("選取項目無效，請重新掃描。");return;}
  long bytes=0;for(Scanner.Item i:snapshot)bytes+=Math.max(0,i.size);
  new androidx.appcompat.app.AlertDialog.Builder(this).setTitle("確認刪除原始檔案？")
-  .setMessage("將刪除 "+snapshot.size()+" 個原始檔案（"+format(bytes)+"）。\n\n"
-   +"確認後還必須在 Android 系統授權視窗允許，才能真正刪除。"
-   +"\n\n本 App 無法復原刪除的檔案，相似與人物分組請先逐張確認。")
+  .setMessage("將永久刪除 "+snapshot.size()+" 個原始檔案（"+format(bytes)+"）。\n\n"
+   +(canManageMedia()?"媒體管理權限已開啟，Android 通常不會額外逐批確認。":
+      "尚未開啟一次授權，Android 可能再顯示系統刪除確認。")
+   +"\n\n刪除無法由本 App 復原，相似與人物分組請先逐張確認。")
   .setNegativeButton("保留檔案",null)
   .setPositiveButton("確認刪除",(d,w)->beginDelete(snapshot)).show();
 }
@@ -932,9 +1038,16 @@ private void beginDelete(ArrayList<Scanner.Item> snapshot){
  op().setPendingDeletes(new ArrayList<>(snapshot));
  op().setDeleting(true);op().setFileBusy(true);
  op().setOperationDeleted(0);op().setOperationDeleteFailed(0);
- status.setText("等待 Android 系統刪除授權（"+snapshot.size()+" 個）…");
+ status.setText("準備刪除 "+snapshot.size()+" 個檔案…");
  updateSelection();
- requestDeleteBatch();
+ boolean offered=getPreferences(0).getBoolean("manage_media_offer_shown",false);
+ if(MediaManageFlow.offerDuringDelete(Build.VERSION.SDK_INT,canManageMedia(),offered)){
+  // Persist the one-time prompt decision, NOT the permission grant.
+  getPreferences(0).edit().putBoolean("manage_media_offer_shown",true).apply();
+  explainAndOpenManageMediaSettings(true);
+ }else{
+  requestDeleteBatch();
+ }
 }
 // A query that fails or returns null is NOT evidence of successful deletion.
 private boolean wasDeletedBySystem(Uri uri){
@@ -1119,7 +1232,9 @@ private void finishDeleteOperation(String reason){
    if(pending.get(i).uri==null)throw new IllegalArgumentException("檔案 URI 無效");
    uris.add(pending.get(i).uri);
   }
-  status.setText("請在 Android 系統視窗確認刪除這批 "+uris.size()+" 個檔案。");
+  status.setText(canManageMedia()
+   ?"已啟用媒體管理權限，正在刪除這批 "+uris.size()+" 個檔案…"
+   :"請在 Android 系統視窗確認刪除這批 "+uris.size()+" 個檔案。");
   startIntentSenderForResult(
    MediaStore.createDeleteRequest(getContentResolver(),uris).getIntentSender(),
    52,null,0,0,0);
