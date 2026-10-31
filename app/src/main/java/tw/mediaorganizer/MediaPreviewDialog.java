@@ -235,15 +235,6 @@ final class MediaPreviewDialog {
     private boolean currentIsVideo(){
         return !items.isEmpty()&&index>=0&&index<items.size()&&items.get(index).video;
     }
-    private int adjacentVideo(int direction){
-        boolean[] flags=new boolean[items.size()];
-        for(int i=0;i<flags.length;i++)flags[i]=items.get(i).video&&!items.get(i).removed;
-        return PlayerGesturePolicy.adjacentVideo(flags,index,direction);
-    }
-    private void goVideo(int direction){
-        int target=adjacentVideo(direction);
-        if(target>=0){index=target;showCurrent();}
-    }
     private void navigate(int direction){
         int target=PreviewNavigation.move(index,items.size(),direction);
         if(target>=0&&target!=index){index=target;showCurrent();}
@@ -253,8 +244,9 @@ final class MediaPreviewDialog {
         if(bottomBar==null)return;
         bottomBar.removeAllViews();
         bottomBar.setOrientation(LinearLayout.VERTICAL);
-        bottomBar.setPadding(dp(landscape?10:18),dp(landscape?8:20),
-                dp(landscape?10:18),dp(landscape?5:18));
+        // No previous/play/next buttons: keep the video itself unobstructed.
+        bottomBar.setPadding(dp(landscape?10:18),dp(landscape?4:8),
+                dp(landscape?10:18),dp(landscape?4:10));
         if(!currentIsVideo()){
             if(!landscape){
                 TextView instruction=text("上下滑切換照片／影片  ·  雙指縮放",11);
@@ -323,12 +315,6 @@ final class MediaPreviewDialog {
         if(landscape){
             LinearLayout row=new LinearLayout(activity);
             row.setGravity(Gravity.CENTER_VERTICAL);
-            row.addView(videoButton("|◀",()->goVideo(-1),adjacentVideo(-1)>=0,"上一部影片"),
-                new LinearLayout.LayoutParams(dp(42),dp(42)));
-            row.addView(videoButton(video.isPlaying()?"❚❚":"▶",this::toggleVideo,true,"播放或暫停"),
-                new LinearLayout.LayoutParams(dp(46),dp(44)));
-            row.addView(videoButton("▶|",()->goVideo(1),adjacentVideo(1)>=0,"下一部影片"),
-                new LinearLayout.LayoutParams(dp(42),dp(42)));
             timeElapsed=timeLabel();row.addView(timeElapsed);
             LinearLayout barHolder=new LinearLayout(activity);barHolder.setGravity(Gravity.CENTER);
             barHolder.setWeightSum(1f);
@@ -350,28 +336,11 @@ final class MediaPreviewDialog {
             View spacer=new View(activity);timeRow.addView(spacer,new LinearLayout.LayoutParams(0,dp(14),1));
             timeRow.addView(timeTotal);
             bottomBar.addView(timeRow,new LinearLayout.LayoutParams(-1,-2));
-            LinearLayout buttons=new LinearLayout(activity);
-            buttons.setGravity(Gravity.CENTER);
-            buttons.addView(videoButton("|◀",()->goVideo(-1),adjacentVideo(-1)>=0,"上一部影片"),
-                    new LinearLayout.LayoutParams(dp(56),dp(48)));
-            buttons.addView(videoButton(video.isPlaying()?"❚❚":"▶",this::toggleVideo,true,"播放或暫停"),
-                    new LinearLayout.LayoutParams(dp(88),dp(52)));
-            buttons.addView(videoButton("▶|",()->goVideo(1),adjacentVideo(1)>=0,"下一部影片"),
-                    new LinearLayout.LayoutParams(dp(56),dp(48)));
-            bottomBar.addView(buttons);
         }
         updateTimeline();
         updateControlVisibility();
     }
 
-    private Button videoButton(String label,Runnable action,boolean enabled,String description){
-        Button b=button(label,()->{revealControls();action.run();});
-        b.setEnabled(enabled);
-        b.setContentDescription(description);
-        b.setTextSize(label.equals("▶")||label.equals("❚❚")?25:19);
-        if(!enabled)b.setTextColor(0xff777777);
-        return b;
-    }
     private TextView timeLabel(){
         TextView text=text("00:00",11);
         text.setPadding(dp(2),0,dp(2),0);
