@@ -13,6 +13,7 @@ import android.os.Looper;
 import android.util.Size;
 import android.view.Gravity;
 import android.view.MotionEvent;
+import android.view.ScaleGestureDetector;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
@@ -59,8 +60,6 @@ final class MediaPreviewDialog {
     private TextView counter;
     private TextView name;
     private TextView error;
-    private Button previous;
-    private Button next;
     private Button playVideo;
     private Bitmap displayedBitmap;
     private volatile int generation;
@@ -68,6 +67,14 @@ final class MediaPreviewDialog {
     private boolean closed;
     private float startX;
     private float startY;
+    private float zoomScale = 1f;
+    private float zoomOffsetX;
+    private float zoomOffsetY;
+    private float previousCentroidX;
+    private float previousCentroidY;
+    private boolean multiFingerGesture;
+    private ScaleGestureDetector zoomDetector;
+    private FrameLayout previewStage;
 
     MediaPreviewDialog(Activity activity, List<Scanner.Item> items, int firstIndex) {
         this.activity = activity;
@@ -128,7 +135,10 @@ final class MediaPreviewDialog {
         root.addView(header);
 
         FrameLayout stage = new FrameLayout(activity);
+        previewStage = stage;
         stage.setBackgroundColor(Color.BLACK);
+        stage.setClipChildren(true);
+        stage.setClipToPadding(true);
         image = new ImageView(activity);
         image.setScaleType(ImageView.ScaleType.FIT_CENTER);
         image.setContentDescription("媒體全螢幕預覽，上滑下一張，下滑上一張");
@@ -149,18 +159,69 @@ final class MediaPreviewDialog {
         error.setVisibility(View.GONE);
         stage.addView(error, new FrameLayout.LayoutParams(-1, -2, Gravity.CENTER));
 
-        // Transparent touch surface, drawn above the video. Never dim or fade
-        // the picture while seeking; a gesture directly updates playback time.
+        // One-finger gestures still browse/seek. Two fingers always zoom or
+        // pan, and never trigger a media switch or video seek on finger lift.
+        zoomDetector = new ScaleGestureDetector(activity,
+                new ScaleGestureDetector.SimpleOnScaleGestureListener() {
+                    @Override public boolean onScale(ScaleGestureDetector detector) {
+                        float factor = detector.getScaleFactor();
+                        if (Float.isNaN(factor) || Float.isInfinite(factor)) return true;
+                        float before = zoomScale;
+                        float after = PreviewZoom.clampScale(before * factor);
+                        if (Math.abs(after - before) < 0.0001f) return true;
+                        // Keep the point between the fingers under the fingers.
+                        float focusX = detector.getFocusX() - previewStage.getWidth() / 2f;
+                        float focusY = detector.getFocusY() - previewStage.getHeight() / 2f;
+                        zoomOffsetX = (zoomOffsetX - focusX) * (after / before) + focusX;
+                        zoomOffsetY = (zoomOffsetY - focusY) * (after / before) + focusY;
+                        zoomScale = after;
+                        applyZoom();
+                        return true;
+                    }
+                });
+
         View gestures = new View(activity);
-        gestures.setContentDescription("上滑下一個、下滑上一個；影片播放中向右快轉、向左倒退");
+        gestures.setContentDescription(
+                "雙指縮放照片或影片；上滑下一個、下滑上一個；影片向右快轉、向左倒退");
         gestures.setBackgroundColor(Color.TRANSPARENT);
         gestures.setOnTouchListener((view, event) -> {
+            zoomDetector.onTouchEvent(event);
             switch (event.getActionMasked()) {
                 case MotionEvent.ACTION_DOWN:
+                    multiFingerGesture = false;
                     startX = event.getX();
                     startY = event.getY();
                     return true;
+                case MotionEvent.ACTION_POINTER_DOWN:
+                    multiFingerGesture = true;
+                    if (event.getPointerCount() >= 2) {
+                        previousCentroidX = (event.getX(0) + event.getX(1)) / 2f;
+                        previousCentroidY = (event.getY(0) + event.getY(1)) / 2f;
+                    }
+                    return true;
+                case MotionEvent.ACTION_MOVE:
+                    if (event.getPointerCount() >= 2) {
+                        multiFingerGesture = true;
+                        float centroidX = (event.getX(0) + event.getX(1)) / 2f;
+                        float centroidY = (event.getY(0) + event.getY(1)) / 2f;
+                        if (zoomScale > 1f) {
+                            zoomOffsetX += centroidX - previousCentroidX;
+                            zoomOffsetY += centroidY - previousCentroidY;
+                            applyZoom();
+                        }
+                        previousCentroidX = centroidX;
+                        previousCentroidY = centroidY;
+                    }
+                    return true;
+                case MotionEvent.ACTION_POINTER_UP:
+                    multiFingerGesture = true;
+                    return true;
                 case MotionEvent.ACTION_UP:
+                    // This includes the trailing one-finger UP after a pinch.
+                    if (multiFingerGesture) {
+                        multiFingerGesture = false;
+                        return true;
+                    }
                     float dy = event.getY() - startY;
                     float dx = event.getX() - startX;
                     if (Math.abs(dx) > Math.abs(dy) * 1.2f
@@ -172,6 +233,7 @@ final class MediaPreviewDialog {
                     }
                     return true;
                 case MotionEvent.ACTION_CANCEL:
+                    multiFingerGesture = false;
                     return true;
                 default:
                     return true;
@@ -195,17 +257,7 @@ final class MediaPreviewDialog {
         playbackTime.setVisibility(View.GONE);
         root.addView(playbackTime, new LinearLayout.LayoutParams(-1, dp(26)));
 
-        LinearLayout controls = new LinearLayout(activity);
-        controls.setGravity(Gravity.CENTER_VERTICAL);
-        previous = action("↓ 上一張", () -> navigate(-1));
-        next = action("↑ 下一張", () -> navigate(1));
-        LinearLayout.LayoutParams left = new LinearLayout.LayoutParams(0, dp(54), 1);
-        left.setMargins(0, 0, dp(8), 0);
-        controls.addView(previous, left);
-        controls.addView(next, new LinearLayout.LayoutParams(0, dp(54), 1));
-        root.addView(controls);
-
-        TextView hint = label("上滑下一個 · 下滑上一個；影片向左倒退、向右快轉", 12);
+        TextView hint = label("雙指縮放 · 上滑下一個／下滑上一個 · 影片左右快轉或倒退", 12);
         hint.setTextColor(0xffA9BBCD);
         hint.setGravity(Gravity.CENTER);
         root.addView(hint);
@@ -215,9 +267,35 @@ final class MediaPreviewDialog {
             generation++;
             decoder.shutdownNow();
             stopVideo();
+            resetZoom();
             releaseImage();
             items.clear();
         });
+    }
+
+    /** Zoom applies to the photo preview and the playback SurfaceView. */
+    private void applyZoom() {
+        zoomScale = PreviewZoom.clampScale(zoomScale);
+        int width = previewStage == null ? 0 : previewStage.getWidth();
+        int height = previewStage == null ? 0 : previewStage.getHeight();
+        zoomOffsetX = PreviewZoom.clampOffset(zoomOffsetX, width, zoomScale);
+        zoomOffsetY = PreviewZoom.clampOffset(zoomOffsetY, height, zoomScale);
+        image.setScaleX(zoomScale);
+        image.setScaleY(zoomScale);
+        image.setTranslationX(zoomOffsetX);
+        image.setTranslationY(zoomOffsetY);
+        videoView.setScaleX(zoomScale);
+        videoView.setScaleY(zoomScale);
+        videoView.setTranslationX(zoomOffsetX);
+        videoView.setTranslationY(zoomOffsetY);
+    }
+
+    private void resetZoom() {
+        zoomScale = 1f;
+        zoomOffsetX = 0f;
+        zoomOffsetY = 0f;
+        multiFingerGesture = false;
+        applyZoom();
     }
 
     private void navigate(int direction) {
@@ -232,12 +310,11 @@ final class MediaPreviewDialog {
         if (closed || items.isEmpty()) return;
         int requestId = ++generation;
         stopVideo();
+        resetZoom();
         Scanner.Item item = items.get(index);
         counter.setText((index + 1) + " / " + items.size());
         name.setText((item.video ? "影片 · " : "照片 · ") +
                 (item.name == null ? "未命名" : item.name));
-        previous.setEnabled(index > 0);
-        next.setEnabled(index < items.size() - 1);
         playVideo.setVisibility(item.video ? View.VISIBLE : View.GONE);
         playVideo.setText("▶ 播放這段影片");
         playbackTime.setVisibility(View.GONE);
