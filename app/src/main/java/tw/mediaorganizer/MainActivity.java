@@ -490,7 +490,7 @@ public class MainActivity extends AppCompatActivity implements ScanService.ScanL
      public int getItemViewType(int pos) { return data.get(pos).type; }
      public androidx.recyclerview.widget.RecyclerView.ViewHolder onCreateViewHolder(android.view.ViewGroup parent, int viewType) {
          if (viewType == 3) {
-             LinearLayout empty = new LinearLayout(MainActivity.this); empty.setOrientation(1); empty.setGravity(Gravity.CENTER);empty.setLayoutParams(new RecyclerView.LayoutParams(-1,-2));
+             LinearLayout empty = new LinearLayout(MainActivity.this); empty.setOrientation(1); empty.setGravity(Gravity.CENTER);empty.setId(R.id.empty_state);empty.setLayoutParams(new RecyclerView.LayoutParams(-1,-2));
              empty.setPadding(dp(16),dp(24),dp(16),dp(24));empty.setBackground(surface(CARD,16,STROKE));
              ImageView icon = new ImageView(MainActivity.this); icon.setImageResource(R.drawable.ic_empty);
              empty.addView(icon, new LinearLayout.LayoutParams(dp(54), dp(54)));
