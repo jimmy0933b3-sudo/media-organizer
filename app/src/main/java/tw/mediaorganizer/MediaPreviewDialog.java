@@ -8,6 +8,8 @@ import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.ImageDecoder;
 import android.net.Uri;
+import android.os.Handler;
+import android.os.Looper;
 import android.util.Size;
 import android.view.Gravity;
 import android.view.MotionEvent;
@@ -44,6 +46,15 @@ final class MediaPreviewDialog {
     private TextView playbackTime;
     private boolean videoActive;
     private boolean videoPrepared;
+    private final Handler clockHandler = new Handler(Looper.getMainLooper());
+    private final Runnable clockTicker = new Runnable() {
+        @Override public void run() {
+            if (!closed && videoActive && videoPrepared) {
+                updatePlaybackTime();
+                clockHandler.postDelayed(this, 750L);
+            }
+        }
+    };
     private ProgressBar progress;
     private TextView counter;
     private TextView name;
@@ -125,7 +136,6 @@ final class MediaPreviewDialog {
         stage.addView(image, new FrameLayout.LayoutParams(-1, -1));
         videoView = new VideoView(activity);
         videoView.setVisibility(View.GONE);
-        videoView.setBackgroundColor(Color.BLACK);
         stage.addView(videoView, new FrameLayout.LayoutParams(-1, -1));
 
         progress = new ProgressBar(activity);
@@ -328,23 +338,26 @@ final class MediaPreviewDialog {
         playbackTime.setVisibility(View.VISIBLE);
         playVideo.setEnabled(false);
         final int videoIndex = index;
+        final int requestId = generation;
         videoView.setOnPreparedListener(mediaPlayer -> {
-            if (closed || !videoActive || videoIndex != index) return;
+            if (closed || !videoActive || videoIndex != index || generation != requestId) return;
             videoPrepared = true;
             progress.setVisibility(View.GONE);
             playVideo.setEnabled(true);
             playVideo.setText("❚❚ 暫停");
             videoView.start();
+            clockHandler.removeCallbacks(clockTicker);
+            clockHandler.post(clockTicker);
             updatePlaybackTime();
         });
         videoView.setOnCompletionListener(mediaPlayer -> {
-            if (!closed && videoActive && videoIndex == index) {
+            if (!closed && videoActive && videoIndex == index && generation == requestId) {
                 playVideo.setText("▶ 重新播放");
                 updatePlaybackTime();
             }
         });
         videoView.setOnErrorListener((mediaPlayer, what, extra) -> {
-            if (!closed && videoIndex == index) {
+            if (!closed && videoIndex == index && generation == requestId) {
                 stopVideo();
                 progress.setVisibility(View.GONE);
                 image.setVisibility(View.VISIBLE);
@@ -392,6 +405,7 @@ final class MediaPreviewDialog {
     }
 
     private void stopVideo() {
+        clockHandler.removeCallbacks(clockTicker);
         if (videoView != null) {
             try {
                 videoView.stopPlayback();
