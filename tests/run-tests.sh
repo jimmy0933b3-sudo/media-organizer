@@ -55,6 +55,17 @@ javac -d .test-classes app/src/main/java/tw/mediaorganizer/VideoSwipeSeek.java t
 java -cp .test-classes tw.mediaorganizer.VideoSwipeSeekTest
 javac -d .test-classes app/src/main/java/tw/mediaorganizer/PlayerGesturePolicy.java tests/PlayerGesturePolicyTest.java
 java -cp .test-classes tw.mediaorganizer.PlayerGesturePolicyTest
+
+# UI regression guard: keep timeline and center-tap playback but no bottom
+# previous/play/next buttons in either orientation.
+PREVIEW=app/src/main/java/tw/mediaorganizer/MediaPreviewDialog.java
+if grep -Eq 'videoButton\\(|goVideo\\(' "$PREVIEW"; then
+  echo "FAIL: Redundant video navigation/playback button was reintroduced"
+  exit 1
+fi
+grep -q 'timeline=new SeekBar(activity)' "$PREVIEW"
+grep -q 'toggleVideo();' "$PREVIEW"
+echo "PASS: Timeline-only playback UI (no bottom transport button row)"
 javac -d .test-classes app/src/main/java/tw/mediaorganizer/PlayerProgressStyle.java tests/PlayerProgressStyleTest.java
 java -cp .test-classes tw.mediaorganizer.PlayerProgressStyleTest
 javac -d .test-classes app/src/main/java/tw/mediaorganizer/DeleteVerification.java tests/DeleteVerificationTest.java
