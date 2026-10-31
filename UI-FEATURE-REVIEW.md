@@ -1,4 +1,4 @@
-# Media Organizer UI 與功能審查（更新至 1.8.6）
+# Media Organizer UI 與功能審查（更新至 1.8.7）
 
 審查範圍：`MainActivity.java`、`ScanService.java`、`Scanner.java`、`README.md`、Actions 檔案。下述 UI 修改為程式碼實作，是否在各尺寸真機上完全達到預期，需以 CI 模擬器與真機畫面驗收。
 
