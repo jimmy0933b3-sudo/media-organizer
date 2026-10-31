@@ -400,13 +400,14 @@ public class MainActivity extends AppCompatActivity implements ScanService.ScanL
   strictness.setEnabled(!b);
   mediaTypeSpinner.setEnabled(!b);
   move.setEnabled(!selected.isEmpty()&&!b&&!op().fileBusy());
-  deleteBtn.setEnabled(!selected.isEmpty()&&!b&&!op().fileBusy());
+  deleteBtn.setEnabled(!selected.isEmpty()&&!op().fileBusy());
   if(b)getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
   else getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
  }
 
  public void onProgress(String s){
   ui(()->{
+   if(op().isDeleting())return;
    long now=System.currentTimeMillis();
    if(now-lastProgress<250)return;
    lastProgress=now;
@@ -418,7 +419,9 @@ public class MainActivity extends AppCompatActivity implements ScanService.ScanL
   ui(()->{
    if(generation<resultGeneration)return;
    resultGeneration=generation;
+   ScanService.applyVerifiedDeletes(partial);
    result=partial;
+   selected.removeIf(item->item.removed||ScanService.isDeleted(item.uri));
    render();
   });
  }
@@ -428,7 +431,9 @@ public class MainActivity extends AppCompatActivity implements ScanService.ScanL
    setBusy(false); if (cancel != null) cancel.setVisibility(View.GONE);
    if(generation<resultGeneration)return;
    resultGeneration=generation;
+   ScanService.applyVerifiedDeletes(scanned);
    result=scanned;
+   selected.removeIf(item->item.removed||ScanService.isDeleted(item.uri));
    saveScanCache(scanned);
    int mediaType=mediaTypeSpinner.getSelectedItemPosition();
    boolean full=Build.VERSION.SDK_INT<33||((mediaType!=2?permission("android.permission.READ_MEDIA_IMAGES"):true)&&(mediaType!=1?permission("android.permission.READ_MEDIA_VIDEO"):true));
@@ -834,7 +839,7 @@ public int getItemCount() { return data.size(); }
   selection.setText("已選 "+selected.size()+" 個 · "+format(total));
   if(scan!=null)scan.setEnabled(!busy&&!op().fileBusy());
   if(move!=null)move.setEnabled(!selected.isEmpty()&&!busy&&!op().fileBusy());
-  if(deleteBtn!=null)deleteBtn.setEnabled(!selected.isEmpty()&&!busy&&!op().fileBusy());
+  if(deleteBtn!=null)deleteBtn.setEnabled(!selected.isEmpty()&&!op().fileBusy());
   if(footerContainer!=null) footerContainer.setVisibility(selected.isEmpty() ? View.GONE : View.VISIBLE);
  }
  private void preview(Scanner.Item tapped) {
@@ -903,12 +908,6 @@ public int getItemCount() { return data.size(); }
  }
 private void confirmDelete(){
  if(selected.isEmpty())return;
- if(busy){
-  new androidx.appcompat.app.AlertDialog.Builder(this).setTitle("掃描尚未結束")
-   .setMessage("請先停止掃描，等掃描結束再刪除，避免舊的掃描結果蓋掉刪除紀錄。")
-   .setPositiveButton("知道了",null).show();
-  return;
- }
  if(op().fileBusy()){
   status.setText("尚有檔案操作進行中，請先完成原本的操作。");
   return;
@@ -927,8 +926,8 @@ private void confirmDelete(){
 }
 private void beginDelete(ArrayList<Scanner.Item> snapshot){
  if(snapshot.isEmpty())return;
- if(busy||op().fileBusy()){
-  status.setText("刪除未開始：掃描或其他檔案操作仍在執行，請完成後重試。");return;
+ if(op().fileBusy()){
+  status.setText("刪除未開始：其他檔案操作仍在執行，請完成後重試。");return;
  }
  op().setPendingDeletes(new ArrayList<>(snapshot));
  op().setDeleting(true);op().setFileBusy(true);
@@ -969,7 +968,14 @@ private void verifyApprovedDeletionBatch(){
   }
   ui(()->{
    if(!op().isDeleting()||op().getPendingDeletes()==null)return;
-   for(Scanner.Item item:verified){item.removed=true;selected.remove(item);}
+   ArrayList<Uri> deletedUris=new ArrayList<>();
+   for(Scanner.Item item:verified){
+    deletedUris.add(item.uri);
+    item.removed=true;
+    selected.removeIf(chosen -> chosen.uri != null && chosen.uri.equals(item.uri));
+   }
+   ScanService.recordVerifiedDeletes(deletedUris);
+   ScanService.applyVerifiedDeletes(result);
    op().setOperationDeleted(op().getOperationDeleted()+verified.size());
    op().setOperationDeleteFailed(op().getOperationDeleteFailed()+unverified.size());
    op().getPendingDeletes().removeAll(batch);
@@ -1267,7 +1273,7 @@ private void failPendingDeletion(String reason){
  }
  public synchronized void removeJournal(Uri uri)throws Exception{JSONArray a=readJournal(),next=new JSONArray();for(int i=0;i<a.length();i++)if(!a.getJSONObject(i).getString("uri").equals(uri.toString()))next.put(a.getJSONObject(i));writeJournal(next);}
  private void undo(){if(op().fileBusy()||busy)return;try{JSONArray a=readJournal();if(a.length()==0){status.setText("沒有可復原的移動紀錄。");return;}new androidx.appcompat.app.AlertDialog.Builder(this).setTitle("復原上次移動").setMessage("將 "+a.length()+" 個紀錄移回原資料夾。同名檔會加識別碼；已不存在的檔案會列為失敗。").setNegativeButton("取消",null).setPositiveButton("復原",(d,w)->{try{op().setPending(new ArrayList<>());for(int i=0;i<a.length();i++){JSONObject o=a.getJSONObject(i);MoveRecord r=new MoveRecord();r.uri=Uri.parse(o.getString("uri"));r.newPath=o.getString("path");r.newName=o.getString("name");op().getPending().add(r);}op().setUndoing(true);op().setOperationHasSuccess(false);op().setOperationMoved(0);op().setOperationFailed(0);op().setFileBusy(true);updateSelection();requestWrite();}catch(Exception e){status.setText("復原紀錄無法讀取。");}}).show();}catch(Exception e){status.setText("復原紀錄無法讀取。");}}
- private void help(){new androidx.appcompat.app.AlertDialog.Builder(this).setTitle("使用說明與隱私").setMessage("1. 授權所有照片與影片後開始掃描。可篩選來源資料夾，或對全相簿掃描。\n2. 重複採 SHA-256；相似照片使用感知雜湊、色彩與比例，影片抽取 7 個畫面。\n3. 人物在手機內用 MobileFaceNet 比對抽樣人臉；分數不是準確率。正面清楚人臉效果較好。\n4. 掃描進行中可查看與勾選，請先等待完成或停止掃描後再執行移動／刪除。\n5. 不自動刪除、不上傳、不在背景持續監控。\n6. 復原只保留上次移動批次。清快取只移除本程式縮圖，不動原照片／影片。").setPositiveButton("關閉",null).show();}
+ private void help(){new androidx.appcompat.app.AlertDialog.Builder(this).setTitle("使用說明與隱私").setMessage("1. 授權所有照片與影片後開始掃描。可篩選來源資料夾，或對全相簿掃描。\n2. 重複採 SHA-256；相似照片使用感知雜湊、色彩與比例，影片抽取 7 個畫面。\n3. 人物在手機內用 MobileFaceNet 比對抽樣人臉；分數不是準確率。正面清楚人臉效果較好。\n4. 掃描時可以邊查看邊刪除已掃描檔案；Android 系統授權後逐筆核實。移動仍需等掃描結束。\n5. 不自動刪除、不上傳、不在背景持續監控。\n6. 復原只保留上次移動批次。清快取只移除本程式縮圖，不動原照片／影片。").setPositiveButton("關閉",null).show();}
  private void clearThumbs(){if(thumbnailLoader!=null)thumbnailLoader.reset();resultGeneration = ScanService.clearCacheAsync(this);}
  private File cacheFile(){return new File(getFilesDir(),"scan-cache.json");}
  public void saveScanCache(Scanner.Result res){

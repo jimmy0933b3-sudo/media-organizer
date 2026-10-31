@@ -55,6 +55,8 @@ javac -d .test-classes app/src/main/java/tw/mediaorganizer/VideoSwipeSeek.java t
 java -cp .test-classes tw.mediaorganizer.VideoSwipeSeekTest
 javac -d .test-classes app/src/main/java/tw/mediaorganizer/DeleteVerification.java tests/DeleteVerificationTest.java
 java -cp .test-classes tw.mediaorganizer.DeleteVerificationTest
+javac -d .test-classes app/src/main/java/tw/mediaorganizer/DeletedMediaRegistry.java tests/DeletedMediaRegistryTest.java
+java -cp .test-classes tw.mediaorganizer.DeletedMediaRegistryTest
 javac -d .test-classes app/src/main/java/tw/mediaorganizer/PreviewZoom.java tests/PreviewZoomTest.java
 java -cp .test-classes tw.mediaorganizer.PreviewZoomTest
 
