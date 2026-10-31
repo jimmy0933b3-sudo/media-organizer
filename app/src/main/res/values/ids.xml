@@ -2,5 +2,4 @@
 <resources>
     <item name="btn_settings" type="id" />
     <item name="btn_back" type="id" />
-    <item name="search_input" type="id" />
 </resources>

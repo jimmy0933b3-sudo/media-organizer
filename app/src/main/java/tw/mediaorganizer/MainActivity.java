@@ -19,7 +19,6 @@ import androidx.appcompat.app.AppCompatActivity;
 public class MainActivity extends AppCompatActivity implements ScanService.ScanListener {
  private final int BG=0xff0B1220,CARD=0xff19283B,TEXT=0xffF4F8FF,ACCENT=0xff5DE1C4,BUTTON_BG=0xff26374C,TEXT_SEC=0xffADBED1;
  private final int STROKE=0xff304357,DANGER=0xffFFC0B5;
- private EditText searchInput;
  private final TextView[] statValues=new TextView[4];
  private View introBanner;
  private FrameLayout root;
@@ -214,19 +213,6 @@ public class MainActivity extends AppCompatActivity implements ScanService.ScanL
    status.setEllipsize(android.text.TextUtils.TruncateAt.END);status.setPadding(dp(4),dp(8),dp(4),dp(9));
    mainContent.addView(status);
 
-   searchInput=new EditText(this);
-   searchInput.setId(R.id.search_input);
-   searchInput.setSingleLine(true);searchInput.setTextSize(13);searchInput.setTextColor(TEXT);
-   searchInput.setHintTextColor(TEXT_SEC);searchInput.setHint("搜尋檔名、資料夾");
-   searchInput.setContentDescription("搜尋掃描結果");
-   searchInput.setImeOptions(android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH);
-   searchInput.setPadding(dp(14),0,dp(14),0);searchInput.setBackground(surface(CARD,14,STROKE));
-   searchInput.addTextChangedListener(new android.text.TextWatcher(){
-     public void beforeTextChanged(CharSequence value,int start,int count,int after){}
-     public void onTextChanged(CharSequence value,int start,int before,int count){limit=20;expandedGroups.clear();render();}
-     public void afterTextChanged(android.text.Editable value){}
-   });
-   mainContent.addView(searchInput,new LinearLayout.LayoutParams(-1,dp(46)));
    TextView listTitle=text("掃描結果  ·  點選縮圖預覽",12);listTitle.setTextColor(TEXT_SEC);
    LinearLayout.LayoutParams listTitleLp=new LinearLayout.LayoutParams(-1,-2);
    listTitleLp.setMargins(0,dp(5),0,dp(1));mainContent.addView(listTitle,listTitleLp);
@@ -291,8 +277,14 @@ public class MainActivity extends AppCompatActivity implements ScanService.ScanL
   loadOpState();
   if (op().fileBusy()) {
       if (op().isDeleting() && op().getPendingDeletes() != null && !op().getPendingDeletes().isEmpty()) {
-          requestDeleteBatch();
-      } else if (op().getPending() != null && !op().getPending().isEmpty()) {
+           new androidx.appcompat.app.AlertDialog.Builder(this)
+             .setTitle("找到未完成的刪除操作")
+             .setMessage("上次的系統刪除授權尚未完整核對。請重新確認，"
+               +"或選擇取消；未核對的檔案不會算作已刪除。")
+             .setPositiveButton("重新確認",(d,w)->requestDeleteBatch())
+             .setNegativeButton("取消",(d,w)->failPendingDeletion("已取消上次未完成的刪除操作。"))
+             .show();
+       } else if (op().getPending() != null && !op().getPending().isEmpty()) {
           requestWrite();
       } else {
           op().setFileBusy(false);
@@ -407,8 +399,8 @@ public class MainActivity extends AppCompatActivity implements ScanService.ScanL
   bgScan.setEnabled(!b);
   strictness.setEnabled(!b);
   mediaTypeSpinner.setEnabled(!b);
-  move.setEnabled(!selected.isEmpty()&&!op().fileBusy());
-  deleteBtn.setEnabled(!selected.isEmpty()&&!op().fileBusy());
+  move.setEnabled(!selected.isEmpty()&&!b&&!op().fileBusy());
+  deleteBtn.setEnabled(!selected.isEmpty()&&!b&&!op().fileBusy());
   if(b)getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
   else getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
  }
@@ -598,11 +590,9 @@ public class MainActivity extends AppCompatActivity implements ScanService.ScanL
              View v = holder.itemView;
              ((TextView)v.findViewById(101)).setText(item.text);
               Button quick=v.findViewById(104);
-              boolean safeBulk=(mode==0||mode==3)&&
-                (searchInput==null||searchInput.getText().toString().trim().isEmpty());
+              boolean safeBulk=mode==0||mode==3;
               quick.setEnabled(safeBulk);
               quick.setText(mode==0?"選取重複副本":mode==3?"選取此檔":"請逐一檢視勾選");
-              if(!safeBulk&&mode==0)quick.setText("搜尋時請逐一勾選");
              ImageView face = v.findViewById(102); TextView faceLabel = v.findViewById(103);
              if (mode == 2 && item.group.face != null) {
                  face.setVisibility(View.VISIBLE); faceLabel.setVisibility(View.VISIBLE);
@@ -657,8 +647,7 @@ public int getItemCount() { return data.size(); }
    if(adapter!=null)adapter.update(newData);
    return;
   }
-  String query=searchInput==null?"":searchInput.getText().toString().trim().toLowerCase(Locale.ROOT);
-  List<Scanner.Group> groups=mode==0?result.exact:mode==1?result.similar:result.people;
+    List<Scanner.Group> groups=mode==0?result.exact:mode==1?result.similar:result.people;
   if(mode==3){
    groups=new ArrayList<>();
    for(Scanner.Item file:result.all)if(!file.removed){
@@ -671,16 +660,6 @@ public int getItemCount() { return data.size(); }
    List<Scanner.Item> active=new ArrayList<>();
    for(Scanner.Item file:group.items)if(!file.removed)active.add(file);
    if(active.size()<(mode==3?1:2))continue;
-   if(!query.isEmpty()){
-    List<Scanner.Item> matched=new ArrayList<>();
-    for(Scanner.Item file:active){
-     String name=file.name==null?"":file.name;
-     String path=file.path==null?"":file.path;
-     if(name.toLowerCase(Locale.ROOT).contains(query)||path.toLowerCase(Locale.ROOT).contains(query))matched.add(file);
-    }
-    if(matched.isEmpty())continue;
-    active=matched;
-   }
    if(displayed>=limit){more=true;break;}
    displayed++;
    long bytes=0;for(Scanner.Item file:active)bytes+=Math.max(0,file.size);
@@ -700,12 +679,11 @@ public int getItemCount() { return data.size(); }
   }
   if(more)newData.add(new ListItem(5,null,null,"顯示更多群組",false));
   if(displayed==0){
-   String empty=query.isEmpty()?
-     (mode==2?"尚無可比對的人物群組。可以啟用人物分析後重新掃描。":"這個分類目前沒有符合項目。可試試其他分類。"):
-     "沒有找到符合「"+query+"」的檔案。請換個關鍵字試試。";
-   newData.add(new ListItem(3,null,null,empty,false));
-  }
-  if(adapter!=null)adapter.update(newData);
+    newData.add(new ListItem(3,null,null,mode==2?
+      "尚無可比對的人物群組。可啟用人物分析後重新掃描。":
+      "這個分類目前沒有符合項目。可試試其他分類。",false));
+   }
+   if(adapter!=null)adapter.update(newData);
  }
  private View settingsScreen;
  private void showSettingsDialog(){
@@ -855,20 +833,18 @@ public int getItemCount() { return data.size(); }
   long total=0;for(Scanner.Item i:selected)total+=i.size;
   selection.setText("已選 "+selected.size()+" 個 · "+format(total));
   if(scan!=null)scan.setEnabled(!busy&&!op().fileBusy());
-  if(move!=null)move.setEnabled(!selected.isEmpty()&&!op().fileBusy());
-  if(deleteBtn!=null)deleteBtn.setEnabled(!selected.isEmpty()&&!op().fileBusy());
+  if(move!=null)move.setEnabled(!selected.isEmpty()&&!busy&&!op().fileBusy());
+  if(deleteBtn!=null)deleteBtn.setEnabled(!selected.isEmpty()&&!busy&&!op().fileBusy());
   if(footerContainer!=null) footerContainer.setVisibility(selected.isEmpty() ? View.GONE : View.VISIBLE);
  }
  private void preview(Scanner.Item tapped) {
-  // Include the whole active category, not just the first 12 rows or 20 groups.
-  // Keep the current search filter and dedupe items repeated across groups.
   LinkedHashMap<String, Scanner.Item> ordered = new LinkedHashMap<>();
-  String query = searchInput == null ? "" :
-      searchInput.getText().toString().trim().toLowerCase(Locale.ROOT);
+  // Include the whole active category, not just the first 12 rows or 20 groups.
+  // Preserve the current category order and dedupe across groups.
   if (result != null) {
    if (mode == 3) {
     for (Scanner.Item item : result.all) {
-     if (!item.removed && matchesPreviewFilter(item, query))
+     if (!item.removed)
       ordered.putIfAbsent(item.uri.toString(), item);
     }
    } else {
@@ -879,7 +855,7 @@ public int getItemCount() { return data.size(); }
      for (Scanner.Item item : group.items) if (!item.removed) activeCount++;
      if (activeCount < 2) continue;
      for (Scanner.Item item : group.items) {
-      if (!item.removed && matchesPreviewFilter(item, query))
+      if (!item.removed)
        ordered.putIfAbsent(item.uri.toString(), item);
      }
     }
@@ -895,13 +871,6 @@ public int getItemCount() { return data.size(); }
    }
   }
   new MediaPreviewDialog(this, items, index).show();
- }
- private boolean matchesPreviewFilter(Scanner.Item item, String query) {
-  if (query.isEmpty()) return true;
-  String name = item.name == null ? "" : item.name;
-  String path = item.path == null ? "" : item.path;
-  return name.toLowerCase(Locale.ROOT).contains(query)
-      || path.toLowerCase(Locale.ROOT).contains(query);
  }
  private String validateDestination(String input){
   if(input==null)input="";input=input.trim();
@@ -932,85 +901,99 @@ public int getItemCount() { return data.size(); }
   String target=validateDestination(folderName);if(target==null)return;ArrayList<Scanner.Item> snapshot=new ArrayList<>(selected);
   new androidx.appcompat.app.AlertDialog.Builder(this).setTitle("確認移動 "+snapshot.size()+" 個檔案").setMessage("目的地："+target+"\n移動後會離開原資料夾；不刪除重複檔。相似與人物分組請先確認。\n同名檔會加上識別碼，不覆蓋既有檔案。\n這次成功的移動會取代上次復原紀錄。").setNegativeButton("取消",null).setPositiveButton("移動",(d,w)->{op().setDestination(target);op().setPending(new ArrayList<>());for(Scanner.Item item:snapshot)if(!target.equals(item.path)){MoveRecord r=new MoveRecord();r.uri=item.uri;r.oldPath=item.path;r.oldName=item.name;r.newPath=target;r.newName=item.name;r.item=item;op().getPending().add(r);}op().setUndoing(false);op().setDeleting(false);op().setOperationHasSuccess(false);op().setOperationMoved(0);op().setOperationFailed(0);op().setFileBusy(true);backupJournal();updateSelection();requestWrite();}).show();
  }
- private void confirmDelete(){
-  if(selected.isEmpty()||op().fileBusy())return;
-  ArrayList<Scanner.Item> snapshot=new ArrayList<>(selected);
-  long bytes=0;for(Scanner.Item item:snapshot)bytes+=Math.max(0,item.size);
-  String warning="將刪除 "+snapshot.size()+" 個檔案（"+format(bytes)+"）。\n\n"
-     +"這是真正刪除相簿中的原始檔案，不是從清單移除，App 無法復原。"
-     +"\n相似照片或人物群組不代表內容完全重複，請逐一預覽確認。";
-  new androidx.appcompat.app.AlertDialog.Builder(this)
-    .setTitle("確認刪除原始檔案？")
-    .setMessage(warning)
-    .setNegativeButton("保留檔案",null)
-    .setPositiveButton("確認刪除",(d,w)->beginDelete(snapshot))
-    .show();
+private void confirmDelete(){
+ if(selected.isEmpty())return;
+ if(busy){
+  new androidx.appcompat.app.AlertDialog.Builder(this).setTitle("掃描尚未結束")
+   .setMessage("請先停止掃描，等掃描結束再刪除，避免舊的掃描結果蓋掉刪除紀錄。")
+   .setPositiveButton("知道了",null).show();
+  return;
  }
- private void beginDelete(ArrayList<Scanner.Item> snapshot){
-  if(snapshot.isEmpty()||busy||op().fileBusy())return;
-  op().setPendingDeletes(snapshot);
-  op().setDeleting(true);
-  op().setFileBusy(true);
-  op().setOperationDeleted(0);op().setOperationDeleteFailed(0);
-  updateSelection();
-  requestDelete();
+ if(op().fileBusy()){
+  status.setText("尚有檔案操作進行中，請先完成原本的操作。");
+  return;
  }
- private void requestDelete(){
-  if(op().getPendingDeletes()==null||op().getPendingDeletes().isEmpty()){
-   op().setFileBusy(false);updateSelection();
-   status.setText("刪除完成 · 成功 "+op().getOperationDeleted()+" · 失敗 "+op().getOperationDeleteFailed());
-   render();
-   return;
-  }
-  tw.mediaorganizer.OperationController.getInstance().getFileWorker().execute(()->{
-   java.util.List<Scanner.Item> directList=new java.util.ArrayList<>(op().getPendingDeletes());
-   java.util.List<Scanner.Item> needPermissionList=new java.util.ArrayList<>();
-   int directDeleted=0;
-   for(Scanner.Item item:directList){
-    boolean exists = false;
-    boolean queryFailed = false;
-    try (android.database.Cursor c = getContentResolver().query(item.uri, new String[]{MediaStore.MediaColumns._ID}, null, null, null)) {
-        if (c != null && c.moveToFirst()) exists = true;
-    } catch(Exception e) { queryFailed = true; }
-    if (queryFailed) {
-        needPermissionList.add(item);
-        continue;
+ ArrayList<Scanner.Item> snapshot=new ArrayList<>();
+ Set<String> seen=new HashSet<>();
+ for(Scanner.Item i:selected)if(i!=null&&i.uri!=null&&!i.removed&&seen.add(i.uri.toString()))snapshot.add(i);
+ if(snapshot.isEmpty()){status.setText("選取項目無效，請重新掃描。");return;}
+ long bytes=0;for(Scanner.Item i:snapshot)bytes+=Math.max(0,i.size);
+ new androidx.appcompat.app.AlertDialog.Builder(this).setTitle("確認刪除原始檔案？")
+  .setMessage("將刪除 "+snapshot.size()+" 個原始檔案（"+format(bytes)+"）。\n\n"
+   +"確認後還必須在 Android 系統授權視窗允許，才能真正刪除。"
+   +"\n\n本 App 無法復原刪除的檔案，相似與人物分組請先逐張確認。")
+  .setNegativeButton("保留檔案",null)
+  .setPositiveButton("確認刪除",(d,w)->beginDelete(snapshot)).show();
+}
+private void beginDelete(ArrayList<Scanner.Item> snapshot){
+ if(snapshot.isEmpty())return;
+ if(busy||op().fileBusy()){
+  status.setText("刪除未開始：掃描或其他檔案操作仍在執行，請完成後重試。");return;
+ }
+ op().setPendingDeletes(new ArrayList<>(snapshot));
+ op().setDeleting(true);op().setFileBusy(true);
+ op().setOperationDeleted(0);op().setOperationDeleteFailed(0);
+ status.setText("等待 Android 系統刪除授權（"+snapshot.size()+" 個）…");
+ updateSelection();
+ requestDeleteBatch();
+}
+// A query that fails or returns null is NOT evidence of successful deletion.
+private boolean wasDeletedBySystem(Uri uri){
+ if(uri==null)return false;
+ try(android.database.Cursor c=getContentResolver().query(uri,
+  new String[]{MediaStore.MediaColumns._ID},null,null,null)){
+  return DeleteVerification.verified(true,c!=null,c!=null&&c.moveToFirst());
+ }catch(Exception e){
+  android.util.Log.w("MediaOrganizer","Cannot verify deletion: "+uri,e);
+  return false;
+ }
+}
+private void verifyApprovedDeletionBatch(){
+ if(op().getPendingDeletes()==null||op().getPendingDeletes().isEmpty()){
+  finishDeleteOperation(null);return;
+ }
+ final ArrayList<Scanner.Item> batch=new ArrayList<>(
+  op().getPendingDeletes().subList(0,Math.min(100,op().getPendingDeletes().size())));
+ status.setText("Android 已授權，正在逐筆確認 "+batch.size()+" 個檔案是否已刪除…");
+ op().getFileWorker().execute(()->{
+  ArrayList<Scanner.Item> verified=new ArrayList<>(),unverified=new ArrayList<>();
+  for(Scanner.Item item:batch){
+   boolean gone=false;
+   for(int attempt=0;attempt<3;attempt++){
+    if(wasDeletedBySystem(item.uri)){gone=true;break;}
+    if(attempt<2)try{Thread.sleep(130);}catch(InterruptedException e){
+     Thread.currentThread().interrupt();break;
     }
-    if (!exists) {
-        item.removed=true;
-        ui(()->selected.remove(item));
-        directDeleted++;
-        continue;
-    }
-    try{
-     int count=getContentResolver().delete(item.uri,null,null);
-     if(count>0){
-      item.removed=true;
-      ui(()->selected.remove(item));
-      directDeleted++;
-     }else{
-      needPermissionList.add(item);
-     }
-    }catch(Exception e){needPermissionList.add(item);}
    }
-   final int d=directDeleted;
-   ui(()->{
-    op().setOperationDeleted(op().getOperationDeleted() + d);
-    op().setPendingDeletes(needPermissionList);
-    if(op().getPendingDeletes().isEmpty()){
-     op().setFileBusy(false);updateSelection();
-     clearOpState();
-     saveScanCache(result);
-     status.setText("刪除完成 · 成功 "+op().getOperationDeleted()+" · 失敗 "+op().getOperationDeleteFailed());
-     render();
-    }else{
-     requestDeleteBatch();
-    }
-   });
+   if(gone)verified.add(item);else unverified.add(item);
+  }
+  ui(()->{
+   if(!op().isDeleting()||op().getPendingDeletes()==null)return;
+   for(Scanner.Item item:verified){item.removed=true;selected.remove(item);}
+   op().setOperationDeleted(op().getOperationDeleted()+verified.size());
+   op().setOperationDeleteFailed(op().getOperationDeleteFailed()+unverified.size());
+   op().getPendingDeletes().removeAll(batch);
+   if(op().getPendingDeletes().isEmpty())
+    finishDeleteOperation(unverified.isEmpty()?null:"部分檔案無法確認刪除，請重新掃描確認。");
+   else requestDeleteBatch();
   });
- }
-
-    private void saveOpState() {
+ });
+}
+private void finishDeleteOperation(String reason){
+ int count=op().getOperationDeleted(),failed=op().getOperationDeleteFailed();
+ op().setPendingDeletes(null);op().setDeleting(false);op().setFileBusy(false);
+ clearOpState();
+ if(count>0)saveScanCache(result);
+ updateSelection();render();
+ String message="確定已刪除 "+count+" 個原始檔案；未刪除或無法確認 "+failed+" 個。";
+ if(reason!=null&&!reason.isEmpty())message+="\n\n"+reason;
+ if(failed>0)message+="\n\n未成功的檔案保留在清單，可檢查權限後重試。";
+ status.setText(message);
+ new androidx.appcompat.app.AlertDialog.Builder(this)
+  .setTitle(failed==0?"刪除完成":count>0?"部分刪除成功":"沒有成功刪除")
+  .setMessage(message).setPositiveButton("確定",null).show();
+}
+     private void saveOpState() {
         try {
             org.json.JSONObject root = new org.json.JSONObject();
             root.put("isDeleting", op().isDeleting());
@@ -1065,27 +1048,22 @@ public int getItemCount() { return data.size(); }
             op().setOperationDeleteFailed(root.optInt("operationDeleteFailed", 0));
 
             if (root.has("pendingDeletes")) {
-                op().setPendingDeletes(new java.util.ArrayList<>());
-                JSONArray deletes = root.getJSONArray("pendingDeletes");
-                for (int i = 0; i < deletes.length(); i++) {
-                    Scanner.Item item = new Scanner.Item();
-                    item.uri = Uri.parse(deletes.getString(i));
-                    boolean exists = false;
-                    try (android.database.Cursor c = getContentResolver().query(item.uri, new String[]{MediaStore.MediaColumns._ID}, null, null, null)) {
-                        if (c != null && c.moveToFirst()) exists = true;
-                    } catch (Exception e) {}
-                    if (!exists) { op().addOperationDeleted(1); continue; }
-                    if (result != null) {
-                        for (Scanner.Item existing : result.all) {
-                            if (existing.uri.equals(item.uri)) { item = existing; break; }
-                        }
-                    }
-                    op().getPendingDeletes().add(item);
-                }
-                if(op().getPendingDeletes().isEmpty()) { op().setPendingDeletes(null); } else { op().setFileBusy(true); }
-            }
+  op().setPendingDeletes(new ArrayList<>());
+  JSONArray deletes=root.getJSONArray("pendingDeletes");
+  for(int i=0;i<deletes.length();i++){
+   Scanner.Item item=new Scanner.Item();
+   item.uri=Uri.parse(deletes.getString(i));
+   // An unreadable MediaStore row does not prove the file was deleted.
+   if(result!=null)for(Scanner.Item current:result.all){
+    if(current.uri.equals(item.uri)){item=current;break;}
+   }
+   op().getPendingDeletes().add(item);
+  }
+  if(op().getPendingDeletes().isEmpty())op().setPendingDeletes(null);
+  else op().setFileBusy(true);
+ }
 
-            if (root.has("pending")) {
+ if (root.has("pending")) {
                 op().setPending(new java.util.ArrayList<>());
                 JSONArray moves = root.getJSONArray("pending");
                 for (int i = 0; i < moves.length(); i++) {
@@ -1126,29 +1104,30 @@ public int getItemCount() { return data.size(); }
     }
 
  private void requestDeleteBatch(){
-  if(op().getPendingDeletes()==null||op().getPendingDeletes().isEmpty()){
-   op().setFileBusy(false);
-   clearOpState();
-   saveScanCache(result);
-   updateSelection();
-   status.setText("刪除完成 · 成功 "+op().getOperationDeleted()+" · 失敗 "+op().getOperationDeleteFailed());
-   render();
-   return;
+ List<Scanner.Item> pending=op().getPendingDeletes();
+ if(pending==null||pending.isEmpty()){finishDeleteOperation(null);return;}
+ saveOpState();
+ try{
+  ArrayList<Uri> uris=new ArrayList<>();
+  for(int i=0;i<Math.min(100,pending.size());i++){
+   if(pending.get(i).uri==null)throw new IllegalArgumentException("檔案 URI 無效");
+   uris.add(pending.get(i).uri);
   }
-  saveOpState();
-  try{
-   ArrayList<Uri> uris=new ArrayList<>();
-   for(int i=0;i<Math.min(100,op().getPendingDeletes().size());i++)uris.add(op().getPendingDeletes().get(i).uri);
-   startIntentSenderForResult(MediaStore.createDeleteRequest(getContentResolver(),uris).getIntentSender(),52,null,0,0,0);
-  }catch(Exception e){
-   status.setText("刪除已完成（直接刪除 "+op().getOperationDeleted()+" 個，需要授權或失敗 "+op().getPendingDeletes().size()+" 個）");
-   op().setPendingDeletes(null);
-   op().setFileBusy(false);
-   saveScanCache(result);
-   updateSelection();
-   render();
-  }
+  status.setText("請在 Android 系統視窗確認刪除這批 "+uris.size()+" 個檔案。");
+  startIntentSenderForResult(
+   MediaStore.createDeleteRequest(getContentResolver(),uris).getIntentSender(),
+   52,null,0,0,0);
+ }catch(Exception e){
+  android.util.Log.e("MediaOrganizer","Unable to launch delete consent",e);
+  failPendingDeletion("無法開啟 Android 系統刪除授權："
+    +e.getClass().getSimpleName()+"。剩餘檔案未刪除。");
  }
+}
+private void failPendingDeletion(String reason){
+ int left=op().getPendingDeletes()==null?0:op().getPendingDeletes().size();
+ op().setOperationDeleteFailed(op().getOperationDeleteFailed()+left);
+ finishDeleteOperation(reason);
+}
  private void finishMoveOperation(){
   op().setPending(null);op().setFileBusy(false);
   if(!op().undoing()){
@@ -1179,31 +1158,11 @@ public int getItemCount() { return data.size(); }
    finishMoveOperation();
    op().setOperationHasSuccess(false);op().setOperationMoved(0);op().setOperationFailed(0);
   }}
-  else if(request==52){if(response==RESULT_OK)applyDeleteBatch();else{
-   status.setText("未獲刪除授權 · 已完成：成功 "+op().getOperationDeleted()+" · 失敗 "+op().getOperationDeleteFailed()+"。未授權之檔案已保留。");
-   if(op().getOperationDeleted()>0)saveScanCache(result);
-   op().setPendingDeletes(null);
-   clearOpState();
-   op().setFileBusy(false);updateSelection();render();
-  }}
+  else if(request==52){
+  if(!op().isDeleting()||op().getPendingDeletes()==null)return;
+  if(response==RESULT_OK)verifyApprovedDeletionBatch();
+  else failPendingDeletion("未取得 Android 系統刪除授權，剩餘檔案仍保留。");
  }
-
- private void applyDeleteBatch(){
-  if(op().getPendingDeletes()==null)return;
-  final List<Scanner.Item> batch=new ArrayList<>(op().getPendingDeletes().subList(0,Math.min(100,op().getPendingDeletes().size())));
-  for(Scanner.Item item:batch){item.removed=true;selected.remove(item);}
-  op().getPendingDeletes().removeAll(batch);
-  op().setOperationDeleted(op().getOperationDeleted() + batch.size());
-  if(op().getPendingDeletes()!=null&&!op().getPendingDeletes().isEmpty()){
-   requestDeleteBatch();
-  }else{
-   op().setPendingDeletes(null);
-   op().setFileBusy(false);
-   clearOpState();
-   saveScanCache(result);
-   status.setText("刪除完成 · 成功 "+op().getOperationDeleted()+" · 失敗 "+op().getOperationDeleteFailed());
-   render();
-  }
  }
 
  private void applyBatch(){
@@ -1308,7 +1267,7 @@ public int getItemCount() { return data.size(); }
  }
  public synchronized void removeJournal(Uri uri)throws Exception{JSONArray a=readJournal(),next=new JSONArray();for(int i=0;i<a.length();i++)if(!a.getJSONObject(i).getString("uri").equals(uri.toString()))next.put(a.getJSONObject(i));writeJournal(next);}
  private void undo(){if(op().fileBusy()||busy)return;try{JSONArray a=readJournal();if(a.length()==0){status.setText("沒有可復原的移動紀錄。");return;}new androidx.appcompat.app.AlertDialog.Builder(this).setTitle("復原上次移動").setMessage("將 "+a.length()+" 個紀錄移回原資料夾。同名檔會加識別碼；已不存在的檔案會列為失敗。").setNegativeButton("取消",null).setPositiveButton("復原",(d,w)->{try{op().setPending(new ArrayList<>());for(int i=0;i<a.length();i++){JSONObject o=a.getJSONObject(i);MoveRecord r=new MoveRecord();r.uri=Uri.parse(o.getString("uri"));r.newPath=o.getString("path");r.newName=o.getString("name");op().getPending().add(r);}op().setUndoing(true);op().setOperationHasSuccess(false);op().setOperationMoved(0);op().setOperationFailed(0);op().setFileBusy(true);updateSelection();requestWrite();}catch(Exception e){status.setText("復原紀錄無法讀取。");}}).show();}catch(Exception e){status.setText("復原紀錄無法讀取。");}}
- private void help(){new androidx.appcompat.app.AlertDialog.Builder(this).setTitle("使用說明與隱私").setMessage("1. 授權所有照片與影片後開始掃描。可篩選來源資料夾，或對全相簿掃描。\n2. 重複採 SHA-256；相似照片使用感知雜湊、色彩與比例，影片抽取 7 個畫面。\n3. 人物在手機內用 MobileFaceNet 比對抽樣人臉；分數不是準確率。正面清楚人臉效果較好。\n4. 掃描過程中即可即時勾選檔案進行『移到此資料夾』或『刪除』。\n5. 不自動刪除、不上傳、不在背景持續監控。\n6. 復原只保留上次移動批次。清快取只移除本程式縮圖，不動原照片／影片。").setPositiveButton("關閉",null).show();}
+ private void help(){new androidx.appcompat.app.AlertDialog.Builder(this).setTitle("使用說明與隱私").setMessage("1. 授權所有照片與影片後開始掃描。可篩選來源資料夾，或對全相簿掃描。\n2. 重複採 SHA-256；相似照片使用感知雜湊、色彩與比例，影片抽取 7 個畫面。\n3. 人物在手機內用 MobileFaceNet 比對抽樣人臉；分數不是準確率。正面清楚人臉效果較好。\n4. 掃描進行中可查看與勾選，請先等待完成或停止掃描後再執行移動／刪除。\n5. 不自動刪除、不上傳、不在背景持續監控。\n6. 復原只保留上次移動批次。清快取只移除本程式縮圖，不動原照片／影片。").setPositiveButton("關閉",null).show();}
  private void clearThumbs(){if(thumbnailLoader!=null)thumbnailLoader.reset();resultGeneration = ScanService.clearCacheAsync(this);}
  private File cacheFile(){return new File(getFilesDir(),"scan-cache.json");}
  public void saveScanCache(Scanner.Result res){

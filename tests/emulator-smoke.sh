@@ -52,8 +52,8 @@ for run_idx in {1..5}; do
    timeout 10s adb -s emulator-5554 shell screencap -p /sdcard/screen.png || true
    timeout 10s adb -s emulator-5554 pull /sdcard/screen.png "$DIAG_DIR/screen_start_run${run_idx}_api${API_LEVEL}.png" || true
 
-   if ! grep -q "search_input" window_dump_start.xml; then
-       echo "ERROR: Gallery search control missing from home screen."
+   if grep -q "search_input" window_dump_start.xml; then
+       echo "ERROR: Removed filename/folder search is still present."
        exit 1
    fi
    if grep -q "btn_settings" window_dump_start.xml; then
