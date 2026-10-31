@@ -217,6 +217,8 @@ public class MainActivity extends AppCompatActivity implements ScanService.ScanL
   // A dedicated 36dp fast-scroll rail; keep row controls outside its touch zone.
   FrameLayout listHost=new FrameLayout(this);
   list=new RecyclerView(this);
+  list.setId(R.id.result_list);
+  list.setContentDescription("掃描結果清單");
   list.setLayoutManager(new LinearLayoutManager(this));
   list.setClipToPadding(false);
   list.setPadding(0,0,dp(36),0);
