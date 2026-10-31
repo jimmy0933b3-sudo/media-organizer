@@ -8,6 +8,8 @@ import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.ImageDecoder;
 import android.net.Uri;
+import android.os.Handler;
+import android.os.Looper;
 import android.util.Size;
 import android.view.Gravity;
 import android.view.MotionEvent;
@@ -22,6 +24,7 @@ import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
+import android.widget.VideoView;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
@@ -31,7 +34,7 @@ import java.util.concurrent.RejectedExecutionException;
 /**
  * Full-screen, offline MediaStore preview. Swipe UP for next, DOWN for previous.
  * Full-resolution originals are sampled to fit the device instead of loaded into
- * memory at camera resolution. Video posters have a separate native player action.
+ * memory at camera resolution. Videos play inside this dialog with direct horizontal seek.
  */
 final class MediaPreviewDialog {
     private final Activity activity;
@@ -39,6 +42,19 @@ final class MediaPreviewDialog {
     private final ExecutorService decoder = Executors.newSingleThreadExecutor();
     private final Dialog dialog;
     private ImageView image;
+    private VideoView videoView;
+    private TextView playbackTime;
+    private boolean videoActive;
+    private boolean videoPrepared;
+    private final Handler clockHandler = new Handler(Looper.getMainLooper());
+    private final Runnable clockTicker = new Runnable() {
+        @Override public void run() {
+            if (!closed && videoActive && videoPrepared) {
+                updatePlaybackTime();
+                clockHandler.postDelayed(this, 750L);
+            }
+        }
+    };
     private ProgressBar progress;
     private TextView counter;
     private TextView name;
@@ -118,6 +134,9 @@ final class MediaPreviewDialog {
         image.setContentDescription("媒體全螢幕預覽，上滑下一張，下滑上一張");
         image.setAdjustViewBounds(false);
         stage.addView(image, new FrameLayout.LayoutParams(-1, -1));
+        videoView = new VideoView(activity);
+        videoView.setVisibility(View.GONE);
+        stage.addView(videoView, new FrameLayout.LayoutParams(-1, -1));
 
         progress = new ProgressBar(activity);
         FrameLayout.LayoutParams loadingParams =
@@ -130,17 +149,26 @@ final class MediaPreviewDialog {
         error.setVisibility(View.GONE);
         stage.addView(error, new FrameLayout.LayoutParams(-1, -2, Gravity.CENTER));
 
-        stage.setOnTouchListener((view, event) -> {
+        // Transparent touch surface, drawn above the video. Never dim or fade
+        // the picture while seeking; a gesture directly updates playback time.
+        View gestures = new View(activity);
+        gestures.setContentDescription("上滑下一個、下滑上一個；影片播放中向右快轉、向左倒退");
+        gestures.setBackgroundColor(Color.TRANSPARENT);
+        gestures.setOnTouchListener((view, event) -> {
             switch (event.getActionMasked()) {
                 case MotionEvent.ACTION_DOWN:
                     startX = event.getX();
                     startY = event.getY();
                     return true;
                 case MotionEvent.ACTION_UP:
-                    float deltaY = event.getY() - startY;
-                    float deltaX = event.getX() - startX;
-                    if (Math.abs(deltaY) > dp(65) && Math.abs(deltaY) > Math.abs(deltaX) * 1.2f) {
-                        navigate(deltaY < 0 ? 1 : -1);
+                    float dy = event.getY() - startY;
+                    float dx = event.getX() - startX;
+                    if (Math.abs(dx) > Math.abs(dy) * 1.2f
+                            && Math.abs(dx) > dp(56) && videoActive && videoPrepared) {
+                        seekBySwipe(dx);
+                    } else if (Math.abs(dy) > dp(65)
+                            && Math.abs(dy) > Math.abs(dx) * 1.2f) {
+                        navigate(dy < 0 ? 1 : -1);
                     }
                     return true;
                 case MotionEvent.ACTION_CANCEL:
@@ -149,6 +177,7 @@ final class MediaPreviewDialog {
                     return true;
             }
         });
+        stage.addView(gestures, new FrameLayout.LayoutParams(-1, -1));
         root.addView(stage, new LinearLayout.LayoutParams(-1, 0, 1));
 
         name = label("", 13);
@@ -158,8 +187,13 @@ final class MediaPreviewDialog {
         name.setPadding(dp(8), dp(9), dp(8), dp(9));
         root.addView(name, new LinearLayout.LayoutParams(-1, -2));
 
-        playVideo = action("▶ 播放這段影片", this::openVideoInPlayer);
+        playVideo = action("▶ 播放這段影片", this::toggleVideo);
         root.addView(playVideo, new LinearLayout.LayoutParams(-1, dp(48)));
+        playbackTime = label("", 13);
+        playbackTime.setTextColor(0xffC6D8E8);
+        playbackTime.setGravity(Gravity.CENTER);
+        playbackTime.setVisibility(View.GONE);
+        root.addView(playbackTime, new LinearLayout.LayoutParams(-1, dp(26)));
 
         LinearLayout controls = new LinearLayout(activity);
         controls.setGravity(Gravity.CENTER_VERTICAL);
@@ -171,7 +205,7 @@ final class MediaPreviewDialog {
         controls.addView(next, new LinearLayout.LayoutParams(0, dp(54), 1));
         root.addView(controls);
 
-        TextView hint = label("上滑下一張  ·  下滑上一張", 12);
+        TextView hint = label("上滑下一個 · 下滑上一個；影片向左倒退、向右快轉", 12);
         hint.setTextColor(0xffA9BBCD);
         hint.setGravity(Gravity.CENTER);
         root.addView(hint);
@@ -180,6 +214,7 @@ final class MediaPreviewDialog {
             closed = true;
             generation++;
             decoder.shutdownNow();
+            stopVideo();
             releaseImage();
             items.clear();
         });
@@ -196,6 +231,7 @@ final class MediaPreviewDialog {
     private void showCurrent() {
         if (closed || items.isEmpty()) return;
         int requestId = ++generation;
+        stopVideo();
         Scanner.Item item = items.get(index);
         counter.setText((index + 1) + " / " + items.size());
         name.setText((item.video ? "影片 · " : "照片 · ") +
@@ -203,6 +239,9 @@ final class MediaPreviewDialog {
         previous.setEnabled(index > 0);
         next.setEnabled(index < items.size() - 1);
         playVideo.setVisibility(item.video ? View.VISIBLE : View.GONE);
+        playVideo.setText("▶ 播放這段影片");
+        playbackTime.setVisibility(View.GONE);
+        image.setVisibility(View.VISIBLE);
         error.setVisibility(View.GONE);
         progress.setVisibility(View.VISIBLE);
         releaseImage();
@@ -264,18 +303,120 @@ final class MediaPreviewDialog {
         if (old != null && !old.isRecycled()) old.recycle();
     }
 
-    private void openVideoInPlayer() {
-        if (items.isEmpty()) return;
-        Scanner.Item item = items.get(index);
-        if (!item.video) return;
-        try {
-            Intent intent = new Intent(Intent.ACTION_VIEW);
-            intent.setDataAndType(item.uri,
-                    item.mime != null ? item.mime : "video/*");
-            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-            activity.startActivity(intent);
-        } catch (ActivityNotFoundException | SecurityException e) {
-            Toast.makeText(activity, "找不到可播放影片的 App，或未取得檔案權限。", Toast.LENGTH_LONG).show();
+    private void toggleVideo() {
+        if (items.isEmpty() || !items.get(index).video || closed) return;
+        if (!videoActive) {
+            startVideo();
+        } else if (videoPrepared) {
+            if (videoView.isPlaying()) {
+                videoView.pause();
+                playVideo.setText("▶ 繼續播放");
+            } else {
+                if (videoView.getDuration() > 0
+                        && videoView.getCurrentPosition() >= videoView.getDuration() - 250) {
+                    videoView.seekTo(0);
+                }
+                videoView.start();
+                playVideo.setText("❚❚ 暫停");
+            }
+            updatePlaybackTime();
         }
+    }
+
+    private void startVideo() {
+        Scanner.Item item = items.get(index);
+        if (!item.video || closed) return;
+        // Invalidate any thumbnail decode running on a background worker.
+        generation++;
+        videoActive = true;
+        videoPrepared = false;
+        videoView.setVisibility(View.VISIBLE);
+        image.setVisibility(View.GONE);
+        error.setVisibility(View.GONE);
+        progress.setVisibility(View.VISIBLE);
+        playbackTime.setText("影片載入中…");
+        playbackTime.setVisibility(View.VISIBLE);
+        playVideo.setEnabled(false);
+        final int videoIndex = index;
+        final int requestId = generation;
+        videoView.setOnPreparedListener(mediaPlayer -> {
+            if (closed || !videoActive || videoIndex != index || generation != requestId) return;
+            videoPrepared = true;
+            progress.setVisibility(View.GONE);
+            playVideo.setEnabled(true);
+            playVideo.setText("❚❚ 暫停");
+            videoView.start();
+            clockHandler.removeCallbacks(clockTicker);
+            clockHandler.post(clockTicker);
+            updatePlaybackTime();
+        });
+        videoView.setOnCompletionListener(mediaPlayer -> {
+            if (!closed && videoActive && videoIndex == index && generation == requestId) {
+                playVideo.setText("▶ 重新播放");
+                updatePlaybackTime();
+            }
+        });
+        videoView.setOnErrorListener((mediaPlayer, what, extra) -> {
+            if (!closed && videoIndex == index && generation == requestId) {
+                stopVideo();
+                progress.setVisibility(View.GONE);
+                image.setVisibility(View.VISIBLE);
+                error.setText("影片無法播放，可能是格式不支援或檔案讀取權限不足。");
+                error.setVisibility(View.VISIBLE);
+            }
+            return true;
+        });
+        try {
+            videoView.setVideoURI(item.uri);
+        } catch (RuntimeException e) {
+            stopVideo();
+            progress.setVisibility(View.GONE);
+            image.setVisibility(View.VISIBLE);
+            error.setText("無法開啟影片：" + e.getClass().getSimpleName());
+            error.setVisibility(View.VISIBLE);
+        }
+    }
+
+    private void seekBySwipe(float deltaX) {
+        if (!videoActive || !videoPrepared) return;
+        int duration = videoView.getDuration();
+        if (duration <= 0) return;
+        int target = VideoSwipeSeek.targetMs(videoView.getCurrentPosition(),
+                duration, deltaX, activity.getResources().getDisplayMetrics().density);
+        // No grey overlay or alpha animation; move the playhead immediately.
+        videoView.seekTo(target);
+        updatePlaybackTime(target, duration);
+    }
+
+    private void updatePlaybackTime() {
+        if (!videoActive || !videoPrepared) return;
+        updatePlaybackTime(videoView.getCurrentPosition(), videoView.getDuration());
+    }
+
+    private void updatePlaybackTime(int positionMs, int durationMs) {
+        playbackTime.setText(formatTime(positionMs) + " / " + formatTime(durationMs));
+    }
+
+    private String formatTime(int millis) {
+        int seconds = Math.max(0, millis / 1000);
+        if (seconds >= 3600) return String.format(java.util.Locale.TAIWAN,
+                "%d:%02d:%02d", seconds / 3600, (seconds / 60) % 60, seconds % 60);
+        return String.format(java.util.Locale.TAIWAN, "%02d:%02d", seconds / 60, seconds % 60);
+    }
+
+    private void stopVideo() {
+        clockHandler.removeCallbacks(clockTicker);
+        if (videoView != null) {
+            try {
+                videoView.stopPlayback();
+            } catch (RuntimeException ignored) {
+                // Not all video codecs initialize before the user changes items.
+            }
+            videoView.setVisibility(View.GONE);
+        }
+        videoActive = false;
+        videoPrepared = false;
+        if (playVideo != null) playVideo.setEnabled(true);
+        if (playbackTime != null) playbackTime.setVisibility(View.GONE);
     }
 }

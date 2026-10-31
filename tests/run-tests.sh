@@ -51,6 +51,8 @@ javac -cp ".test-classes:.test-classes/json-20231013.jar" -d .test-classes app/s
 
 javac -d .test-classes app/src/main/java/tw/mediaorganizer/PreviewNavigation.java tests/PreviewNavigationTest.java
 java -cp .test-classes tw.mediaorganizer.PreviewNavigationTest
+javac -d .test-classes app/src/main/java/tw/mediaorganizer/VideoSwipeSeek.java tests/VideoSwipeSeekTest.java
+java -cp .test-classes tw.mediaorganizer.VideoSwipeSeekTest
 
 java -cp .test-classes tw.mediaorganizer.SimilarityTest
 java -cp .test-classes tw.mediaorganizer.ScanAndDeleteTest
