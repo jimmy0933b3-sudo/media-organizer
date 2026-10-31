@@ -29,6 +29,9 @@ final class ThumbnailLoader {
     private final ConcurrentHashMap<String, CopyOnWriteArrayList<WeakReference<ImageView>>> waiting =
             new ConcurrentHashMap<>();
     private final java.util.Set<String> running = ConcurrentHashMap.newKeySet();
+    // Atomic registration/completion prevents an item from losing its final thumbnail
+    // when another row for the same URI binds at the exact moment decoding finishes.
+    private final Object pendingLock = new Object();
     private final ConcurrentHashMap<String, Long> failures = new ConcurrentHashMap<>();
     private volatile boolean closed;
 
@@ -57,9 +60,11 @@ final class ThumbnailLoader {
 
         Long lastFailure = failures.get(key);
         if (lastFailure != null && System.currentTimeMillis() - lastFailure < 12000) return;
-        waiting.computeIfAbsent(key, k -> new CopyOnWriteArrayList<>())
-                .add(new WeakReference<>(target));
-        if (!running.add(key)) return;
+        synchronized (pendingLock) {
+            waiting.computeIfAbsent(key, k -> new CopyOnWriteArrayList<>())
+                    .add(new WeakReference<>(target));
+            if (!running.add(key)) return;
+        }
 
         try {
             workers.execute(() -> {
@@ -75,8 +80,11 @@ final class ThumbnailLoader {
                 } catch (Exception | OutOfMemoryError e) {
                     failures.put(key, System.currentTimeMillis());
                 } finally {
-                    List<WeakReference<ImageView>> targets = waiting.remove(key);
-                    running.remove(key);
+                    List<WeakReference<ImageView>> targets;
+                    synchronized (pendingLock) {
+                        targets = waiting.remove(key);
+                        running.remove(key);
+                    }
                     if (targets != null && !closed && !activity.isDestroyed()) {
                         activity.runOnUiThread(() -> {
                             Bitmap bitmap = memory.get(key);
@@ -90,8 +98,10 @@ final class ThumbnailLoader {
                 }
             });
         } catch (java.util.concurrent.RejectedExecutionException e) {
-            waiting.remove(key);
-            running.remove(key);
+            synchronized (pendingLock) {
+                waiting.remove(key);
+                running.remove(key);
+            }
         }
     }
 
